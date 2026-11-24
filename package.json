@@ -1,0 +1,71 @@
+{
+  "name": "candela",
+  "productName": "Candela",
+  "version": "1.0.0",
+  "description": "Free charting: live crypto and stocks, indicators, custom scripts and alerts",
+  "main": "desktop/main.js",
+  "author": "Candela",
+  "private": true,
+  "scripts": {
+    "server": "node server.js",
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis portable",
+    "installer:win": "makensis desktop/installer.nsi",
+    "dist:win-linux": "electron-builder --win portable dir",
+    "installer:win-linux": "makensis desktop/installer.nsi"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.1"
+  },
+  "build": {
+    "appId": "com.candela.charts",
+    "productName": "Candela",
+    "copyright": "Candela",
+    "files": [
+      "index.html",
+      "css/**",
+      "js/**",
+      "server.js",
+      "desktop/main.js",
+      "desktop/preload.js",
+      "desktop/icons/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "desktop/build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "desktop/build/icon.png"
+    },
+    "portable": {
+      "artifactName": "Candela-${version}-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Candela",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Candela-Setup-${version}.exe"
+    }
+  }
+}

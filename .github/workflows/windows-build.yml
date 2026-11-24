@@ -1,0 +1,101 @@
+# Builds the Windows app on a real Windows machine, tests it, and publishes it on the Releases page.
+# Runs on every push to main, and on demand from the Actions tab ("Run workflow").
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # to publish the release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install build tools
+        run: npm ci
+
+      - name: Build installer and portable app
+        run: npx electron-builder --win nsis portable --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false # no code-signing certificate
+
+      - name: Test the installer (install, start, check, uninstall)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
+
+          function Wait-Candela {
+            for ($i = 0; $i -lt 90; $i++) {
+              Start-Sleep -Seconds 1
+              try {
+                $s = Invoke-RestMethod -Uri http://127.0.0.1:47821/api/status -TimeoutSec 3
+                if ($s.app -eq 'candela-alert-server') { return $true }
+              } catch {}
+            }
+            return $false
+          }
+
+          Start-Process "dist\Candela-Setup-$v.exe" -ArgumentList '/S' -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter Candela.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Candela.exe was not installed' }
+          "Installed: $($exe.FullName)"
+          $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Candela.lnk"
+          if (-not (Test-Path $lnk)) { throw 'Start menu shortcut is missing' }
+          'Start menu shortcut: OK'
+
+          Start-Process $exe.FullName
+          if (-not (Wait-Candela)) { throw 'Installed Candela did not start its alert server' }
+          $page = Invoke-WebRequest -Uri http://127.0.0.1:47821/ -UseBasicParsing
+          if ($page.Content -notmatch '<title>Candela') { throw 'The app page did not load' }
+          'Installed app runs: alert server and app page respond'
+          Stop-Process -Name Candela -Force
+          Start-Sleep -Seconds 3
+
+          $un = Get-ChildItem $exe.DirectoryName -Filter 'Uninstall*.exe' | Select-Object -First 1
+          if (-not $un) { throw 'No uninstaller found' }
+          Start-Process $un.FullName -ArgumentList '/S' -Wait
+          for ($i = 0; $i -lt 60 -and (Test-Path $exe.FullName); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path $exe.FullName) { throw 'Uninstalling left the program behind' }
+          if (Test-Path $lnk) { throw 'Uninstalling left the Start menu shortcut behind' }
+          'Uninstalled cleanly'
+
+      - name: Test the portable app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          Start-Process "dist\Candela-$v-portable.exe"
+          $ok = $false
+          for ($i = 0; $i -lt 120; $i++) {
+            Start-Sleep -Seconds 1
+            try { if ((Invoke-RestMethod -Uri http://127.0.0.1:47821/api/status -TimeoutSec 3).app -eq 'candela-alert-server') { $ok = $true; break } } catch {}
+          }
+          if (-not $ok) { throw 'The portable app did not start its alert server' }
+          'Portable app runs'
+          Stop-Process -Name Candela -Force -ErrorAction SilentlyContinue
+
+      - name: Publish on the Releases page
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$v"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "Candela $v" --notes-file desktop/RELEASE_NOTES.md --target $env:GITHUB_SHA
+          }
+          gh release upload $tag "dist\Candela-Setup-$v.exe" "dist\Candela-$v-portable.exe" --clobber
+          "Published: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag"

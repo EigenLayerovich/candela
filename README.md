@@ -130,34 +130,35 @@ closes (or every 15 seconds for "as soon as it appears"). The server uses the ap
 script code, so alerts behave exactly as they do in the browser. Crypto data comes from the exchanges'
 public APIs; no key needed.
 
-## Crypto exchanges: Binance, Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, Kraken, Coinbase
+## Crypto exchanges: Binance, Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex
 
 Binance is the default. Charts, watchlist, comparisons and alerts also work with **Bybit, OKX, Bitget,
-KuCoin, Gate.io, MEXC, Kraken and Coinbase** spot markets: public data, no account or key.
+KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex** spot markets: public data, no account or key.
 
 - **Symbol search**: the chips under the search box pick where to look: *All*, one exchange, or
   *Stocks & forex*. *All* shows the best matches on every exchange once you type. Exchange symbols show
   as `BTC/USD` with a small tag (`BY` Bybit, `OK` OKX, `BG` Bitget, `KC` KuCoin, `GT` Gate.io,
-  `MX` MEXC, `KR` Kraken, `CB` Coinbase); the chart title
+  `MX` MEXC, `HX` HTX, `KR` Kraken, `CB` Coinbase, `BF` Bitfinex); the chart title
   names the exchange.
 - **Across exchanges** (side panel, under the watchlist): the chart's coin on every exchange, with the
   last price, 24h change and the difference from the chart you're looking at, refreshed every 15
   seconds. Click a row to open that market. Handy for spotting premiums and gaps between exchanges.
 - **Every timeframe works everywhere.** Where an exchange lacks one (Coinbase has no 4H, Kraken no 2H,
-  Gate.io no 2H or weekly), Candela builds it from smaller candles. Weeks start on Monday on every exchange.
-- **Live updates**: WebSocket on Bybit, OKX, Bitget, Gate.io and Kraken; Coinbase builds the current candle from live trades;
+  Gate.io no 2H or weekly; HTX's daily candles start at 16:00 UTC, so its days and weeks are built too), Candela builds it from smaller candles. Weeks start on Monday on every exchange.
+- **Live updates**: WebSocket on Bybit, OKX, Bitget, Gate.io, HTX, Kraken and Bitfinex; Coinbase builds the current candle from live trades;
   KuCoin and MEXC refresh every 3–4 seconds.
 - **Alerts** (price and script markers) work on every exchange, in the browser and on the alert server.
 
 Things to know:
 
-- **KuCoin and MEXC** don't let web pages load their data, so they work in the **Windows app** or when
+- **KuCoin, MEXC and Bitfinex** don't let web pages load their data, so they work in the **Windows app** or when
   you open Candela from `node server.js` (the server relays their public market data, nothing else). In a
   plain browser tab it says so.
 - **Bybit** blocks some countries, including the US. Where it's blocked, the search and the panel say
   so; elsewhere it works like the others.
-- **Kraken** only gives the latest 720 candles of each timeframe (e.g. 30 days of 1H), so you can't
-  scroll back further there.
+- **Kraken** only gives the latest 720 candles of each timeframe (e.g. 30 days of 1H), and **HTX** the
+  latest 2,000 (daily and weekly charts reach back about 330 days), so you can't scroll back further there.
+- Bitfinex calls Tether **UST** and USD Coin **UDC**; Candela shows them as USDT and USDC.
 - Coinbase's candle history can lag a minute behind; the live feed fills in the current candle.
 
 ## Stocks, ETFs and forex
@@ -215,7 +216,7 @@ is meant for personal use.
 ## Features
 
 - **Live data**: every Binance spot pair (BTC, ETH, SOL, ~3,000 pairs), real-time via WebSocket,
-  with a bar-close countdown; plus Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, Kraken and Coinbase (see above). **Stocks and ETFs** as Binance bStocks (free, live, no key) or via
+  with a bar-close countdown; plus Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex (see above). **Stocks and ETFs** as Binance bStocks (free, live, no key) or via
   Twelve Data with forex too (free key); see above.
   Scroll or zoom left and older history loads automatically.
 - **Timeframes**: 1m 3m 5m 15m 30m 1H 2H 4H 6H 12H 1D 3D 1W
@@ -338,7 +339,7 @@ It shows up in the Indicators dialog automatically, with a settings panel genera
 - `js/script.js`: Candela Script: lexer, parser, checker, interpreter, built-in functions
 - `js/alerts-core.js`: alert rules shared by the browser and the server
 - `js/data.js`: Binance REST/WebSocket, Twelve Data, demo feed, CSV parser
-- `js/exchanges.js`: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, Kraken and Coinbase, and building missing timeframes
+- `js/exchanges.js`: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex, and building missing timeframes
 - `server.js`: the alert server (also serves the app)
 - `desktop/`: the Windows app (Electron): `main.js` (window, tray, notifications), `preload.js`,
   `installer.nsi` (installer), icons
@@ -348,6 +349,6 @@ It shows up in the Indicators dialog automatically, with a settings panel genera
 
 - Stocks and forex need a free Twelve Data key, and its free plan limits how often charts can refresh
   (every minute or two, slower with many stock charts open). There is no pre-market or after-hours data.
-- KuCoin and MEXC need the Windows app or `node server.js`; Bybit is unavailable where Bybit blocks access
-  (e.g. the US); Kraken charts stop at 720 candles back.
+- KuCoin, MEXC and Bitfinex need the Windows app or `node server.js`; Bybit is unavailable where Bybit
+  blocks access (e.g. the US); Kraken charts stop at 720 candles back, HTX charts at 2,000.
 - Without the server, alerts only run while the tab is open. With it, the server has to stay running.

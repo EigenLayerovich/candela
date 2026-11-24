@@ -1,4 +1,8 @@
-## New in 1.3.0
+## New in 1.4.0
+
+- **HTX and Bitfinex** added, for eleven crypto exchanges in all: charts with every timeframe, live updates, watchlist, comparisons, alerts, and the *Across exchanges* panel. Bitfinex, like KuCoin and MEXC, works in this app but not in a plain browser tab. HTX keeps only its latest 2,000 candles per timeframe.
+
+## In 1.3.0
 
 - **Bitget and MEXC** added, for nine crypto exchanges in all: charts with every timeframe, live updates, watchlist, comparisons, alerts, and the *Across exchanges* panel. MEXC, like KuCoin, works in this app but not in a plain browser tab.
 

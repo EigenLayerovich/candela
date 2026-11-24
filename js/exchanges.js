@@ -1,11 +1,11 @@
-/* Candela — more crypto exchanges: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, Kraken and Coinbase (Binance lives in data.js).
+/* Candela — more crypto exchanges: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex (Binance lives in data.js).
  *
  * Symbols are written EXCHANGE:BASE/QUOTE, e.g. "KRAKEN:BTC/USD", "KUCOIN:ETH/USDT". Every exchange gets
  * the same five operations: symbol list, candle history, live updates, a 24-hour ticker, and the candle
  * intervals it offers. Timeframes an exchange lacks (Coinbase has no 4H, Kraken no 2H…) are built from
  * smaller candles, so every exchange supports every timeframe.
  *
- * Browser access: most exchanges allow web pages to call them. KuCoin and MEXC don't, so they go through
+ * Browser access: most exchanges allow web pages to call them. KuCoin, MEXC and Bitfinex don't, so they go through
  * Candela's server (the Windows app and `node server.js` have one); Bybit is tried directly first. */
 (function (root) {
   'use strict';
@@ -44,7 +44,9 @@
   }
 
   // ---------------------------------------------------------------- reconnecting WebSocket
-  function socket(url, { onOpen, onMessage, onStatus, ping }) {
+  // gzip: messages arrive compressed (HTX). answer(m) may return a reply to send at once (HTX's pings).
+  const gunzip = (buf) => new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  function socket(url, { onOpen, onMessage, onStatus, ping, gzip, answer }) {
     let ws, closed = false, tries = 0, timer = null, pinger = null;
     const open = () => {
       if (closed) return;
@@ -56,7 +58,20 @@
         onOpen((m) => { try { ws.send(JSON.stringify(m)); } catch (e) { /* closing */ } });
         if (ping) pinger = setInterval(() => { try { ws.send(typeof ping.msg === 'string' ? ping.msg : JSON.stringify(ping.msg)); } catch (e) { /* closing */ } }, ping.every);
       };
-      ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } onMessage(m); };
+      const sock = ws;
+      const handle = (txt) => {
+        let m;
+        try { m = JSON.parse(txt); } catch (e) { return; }
+        const reply = answer && answer(m);
+        if (reply) { try { sock.send(JSON.stringify(reply)); } catch (e) { /* closing */ } }
+        onMessage(m);
+      };
+      let chain = Promise.resolve(); // decompress in order
+      if (gzip) ws.binaryType = 'arraybuffer';
+      ws.onmessage = (ev) => {
+        if (gzip && typeof ev.data !== 'string') chain = chain.then(() => gunzip(ev.data)).then((txt) => { if (!closed && ws === sock) handle(txt); }, () => {});
+        else handle(ev.data);
+      };
       ws.onclose = () => { clearInterval(pinger); if (!closed) { onStatus && onStatus('reconnecting'); retry(); } };
       ws.onerror = () => { try { ws.close(); } catch (e) { /* ignore */ } };
     };
@@ -392,8 +407,92 @@
     },
   };
 
-  const EXCHANGES = { BYBIT, OKX, BITGET, KUCOIN, GATE, MEXC, KRAKEN, COINBASE };
-  const ID_RE = /^(BYBIT|OKX|BITGET|KUCOIN|GATE|MEXC|KRAKEN|COINBASE):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
+  // ---------------------------------------------------------------- HTX (Huobi)
+  const HTX = {
+    id: 'HTX', name: 'HTX', tag: 'HX', cors: true, rest: 'https://api.huobi.pro',
+    // HTX's own daily and weekly candles start at midnight in Singapore (16:00 UTC), so Candela builds
+    // UTC days and Monday weeks from its 4-hour candles instead
+    tfs: { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '60min', '4h': '4hour' },
+    historyNote: 'HTX only provides the latest 2,000 candles for each timeframe (daily and weekly charts are built from 4-hour candles: about 330 days).',
+    ok(j) { if (j.status !== 'ok') throw err(`HTX: ${j['err-msg'] || j['err-code'] || 'error'}`, { fatal: /symbol|invalid/i.test(j['err-msg'] || '') }); return j; },
+    async pairs() {
+      const j = this.ok(await get(this, `${this.rest}/v1/common/symbols`));
+      return j.data.filter((p) => p.state === 'online').map((p) => [p['base-currency'], p['quote-currency']]);
+    },
+    async history(b, q, tf, { limit = 1000, endTime } = {}) {
+      if (endTime) return []; // no older history on HTX
+      const j = this.ok(await get(this, `${this.rest}/market/history/kline?symbol=${(b + q).toLowerCase()}&period=${this.tfs[tf]}&size=${Math.min(2000, limit)}`));
+      // { id (s), open, close, low, high, amount (volume), vol (quote volume) }, newest first
+      return sortAsc(j.data.map((d) => ({ t: d.id * 1000, o: d.open, h: d.high, l: d.low, c: d.close, v: d.amount })));
+    },
+    stream(b, q, tf, onBar, onStatus) {
+      const ch = `market.${(b + q).toLowerCase()}.kline.${this.tfs[tf]}`;
+      return socket('wss://api.huobi.pro/ws', {
+        gzip: true,
+        answer: (m) => (m.ping ? { pong: m.ping } : null),
+        onOpen: (send) => send({ sub: ch, id: 'candela' }),
+        onMessage: (m) => { const d = m.tick; if (m.ch === ch && d) onBar({ t: d.id * 1000, o: d.open, h: d.high, l: d.low, c: d.close, v: d.amount }); },
+        onStatus,
+      });
+    },
+    async ticker(b, q) {
+      const t = this.ok(await get(this, `${this.rest}/market/detail?symbol=${(b + q).toLowerCase()}`)).tick;
+      return { c: t.close, o: t.open, vq: t.vol };
+    },
+  };
+
+  // ---------------------------------------------------------------- Bitfinex
+  // Bitfinex has its own short names for some coins (UST is Tether's USDT, UDC is USDC…)
+  const BFX_NAMES = { UST: 'USDT', UDC: 'USDC', ALG: 'ALGO', DSH: 'DASH', IOT: 'IOTA', OPX: 'OP', WBT: 'WBTC' };
+  const BFX_CODES = Object.fromEntries(Object.entries(BFX_NAMES).map(([k, v]) => [v, k]));
+  const bfxPair = (b, q) => {
+    const B = BFX_CODES[b] || b, Q = BFX_CODES[q] || q;
+    return B.length > 3 || Q.length > 3 ? `${B}:${Q}` : B + Q; // "BTCUSD", "AVAX:UST"
+  };
+  const BITFINEX = {
+    id: 'BITFINEX', name: 'Bitfinex', tag: 'BF', cors: false, rest: 'https://api-pub.bitfinex.com', quotes: ['USD', 'USDT', 'USDC', 'EUR'],
+    tfs: { '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '6h': '6h', '12h': '12h', '1d': '1D', '1w': '1W' },
+    async pairs() {
+      const [list] = await get(this, `${this.rest}/v2/conf/pub:list:pair:exchange`);
+      return list.filter((p) => !/^TEST/.test(p)).map((p) => {
+        const [b, q] = p.includes(':') ? p.split(':') : [p.slice(0, 3), p.slice(3)];
+        return [BFX_NAMES[b] || b, BFX_NAMES[q] || q];
+      });
+    },
+    // [time(ms), open, close, high, low, volume], newest first; up to 10,000 per request
+    history(b, q, tf, opts) {
+      return pages(opts, 10000, async (n, end) => {
+        let url = `${this.rest}/v2/candles/trade:${this.tfs[tf]}:t${bfxPair(b, q)}/hist?limit=${n}&sort=-1`;
+        if (end) url += `&end=${Math.floor(end)}`;
+        const rows = await get(this, url);
+        if (!Array.isArray(rows) || rows[0] === 'error') throw err(`Bitfinex: ${rows[2] || 'unexpected reply'}`);
+        return rows.map((r) => ({ t: r[0], o: r[1], h: r[3], l: r[4], c: r[2], v: r[5] }));
+      });
+    },
+    stream(b, q, tf, onBar, onStatus) {
+      const key = `trade:${this.tfs[tf]}:t${bfxPair(b, q)}`;
+      let chan = null;
+      const bar = (r) => ({ t: r[0], o: r[1], h: r[3], l: r[4], c: r[2], v: r[5] });
+      return socket('wss://api-pub.bitfinex.com/ws/2', {
+        onOpen: (send) => { chan = null; send({ event: 'subscribe', channel: 'candles', key }); },
+        onMessage: (m) => {
+          if (!Array.isArray(m)) { if (m.event === 'subscribed' && m.key === key) chan = m.chanId; return; }
+          if (m[0] !== chan || !Array.isArray(m[1])) return; // heartbeats are "hb"
+          if (Array.isArray(m[1][0])) { for (const r of m[1].slice().sort((x, y) => x[0] - y[0]).slice(-2)) onBar(bar(r)); } // first message: past candles
+          else onBar(bar(m[1]));
+        },
+        onStatus, ping: { every: 20000, msg: { event: 'ping', cid: 1 } },
+      });
+    },
+    async ticker(b, q) {
+      const t = await get(this, `${this.rest}/v2/ticker/t${bfxPair(b, q)}`);
+      if (!Array.isArray(t) || t[0] === 'error') throw err('Bitfinex: no price');
+      return { c: t[6], o: t[6] - t[4], vq: t[7] * t[6] };
+    },
+  };
+
+  const EXCHANGES = { BYBIT, OKX, BITGET, KUCOIN, GATE, MEXC, HTX, KRAKEN, COINBASE, BITFINEX };
+  const ID_RE = /^(BYBIT|OKX|BITGET|KUCOIN|GATE|MEXC|HTX|KRAKEN|COINBASE|BITFINEX):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
   function parse(sym) {
     const m = ID_RE.exec(sym || '');
     return m ? { ex: EXCHANGES[m[1]], b: m[2], q: m[3] } : null;
@@ -425,6 +524,7 @@
     const factor = TF[tf] / TF[src];
     const bars = await s.ex.history(s.b, s.q, src, { limit: Math.min(limit * factor, 3000), endTime });
     const out = resample(bars, tf);
+    if (out.length && bars.length && bars[0].t > out[0].t) out.shift(); // the oldest bucket is incomplete
     if (endTime) return out.filter((b) => b.t + TF[tf] <= endTime + 1); // only whole buckets before the chart's first bar
     return out.slice(-limit);
   }

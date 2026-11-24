@@ -1,4 +1,10 @@
-## New in 1.4.0
+## New in 1.5.0
+
+- **Indicators on another timeframe**: every built-in indicator (SMA, EMA, WMA, Bollinger Bands, RSI, MACD…) has a *Timeframe* setting. Set an SMA 200 to 1D and it shows the 200-day average on any chart: 4H, weekly, monthly.
+- **Custom timeframes**: 2D, 3H, 12H, 2W, 45m, 1M, 3M… from the ⋯ timeframe menu → *Custom…*, or type a number on the chart. They work on every exchange, live.
+- New standard timeframes: 8H and 1M (monthly).
+
+## In 1.4.0
 
 - **HTX and Bitfinex** added, for eleven crypto exchanges in all: charts with every timeframe, live updates, watchlist, comparisons, alerts, and the *Across exchanges* panel. Bitfinex, like KuCoin and MEXC, works in this app but not in a plain browser tab. HTX keeps only its latest 2,000 candles per timeframe.
 

@@ -498,60 +498,8 @@
     return m ? { ex: EXCHANGES[m[1]], b: m[2], q: m[3] } : null;
   }
 
-  // ---------------------------------------------------------------- building missing timeframes
-  const WEEK_OFFSET = 4 * 86400e3; // 1970-01-01 was a Thursday; weeks start on Monday, as on Binance
-  const bucketOf = (t, tf) => (tf === '1w' ? Math.floor((t - WEEK_OFFSET) / TF[tf]) * TF[tf] + WEEK_OFFSET : Math.floor(t / TF[tf]) * TF[tf]);
-  // the largest offered timeframe that divides the wanted one
-  function sourceTf(ex, tf) {
-    return Object.keys(ex.tfs).filter((s) => TF[s] < TF[tf] && TF[tf] % TF[s] === 0 && (tf !== '1w' || TF[s] <= 86400e3))
-      .sort((a, b) => TF[b] - TF[a])[0] || null;
-  }
-  function resample(bars, tf) {
-    const out = [];
-    for (const b of bars) {
-      const t = bucketOf(b.t, tf), last = out[out.length - 1];
-      if (last && last.t === t) { last.h = Math.max(last.h, b.h); last.l = Math.min(last.l, b.l); last.c = b.c; last.v += b.v; }
-      else out.push({ t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v });
-    }
-    return out;
-  }
-
-  async function history(sym, tf, { limit = 1000, endTime } = {}) {
-    const s = parse(sym);
-    if (s.ex.tfs[tf]) return s.ex.history(s.b, s.q, tf, { limit, endTime });
-    const src = sourceTf(s.ex, tf);
-    if (!src) throw err(`${tfLabel(tf)} isn't available on ${s.ex.name}`, { fatal: true });
-    const factor = TF[tf] / TF[src];
-    const bars = await s.ex.history(s.b, s.q, src, { limit: Math.min(limit * factor, 3000), endTime });
-    const out = resample(bars, tf);
-    if (out.length && bars.length && bars[0].t > out[0].t) out.shift(); // the oldest bucket is incomplete
-    if (endTime) return out.filter((b) => b.t + TF[tf] <= endTime + 1); // only whole buckets before the chart's first bar
-    return out.slice(-limit);
-  }
-
-  function stream(sym, tf, onBar, onStatus) {
-    const s = parse(sym);
-    if (s.ex.tfs[tf]) return s.ex.stream(s.b, s.q, tf, onBar, onStatus);
-    // live updates for a built timeframe: follow the source candles of the current bucket
-    const src = sourceTf(s.ex, tf), bucket = new Map();
-    let stopped = false, stop = null;
-    const emit = (t) => {
-      const parts = [...bucket.values()].filter((b) => bucketOf(b.t, tf) === t).sort((a, b) => a.t - b.t);
-      if (parts.length) onBar(resample(parts, tf)[0]);
-    };
-    const add = (b) => {
-      const t = bucketOf(b.t, tf);
-      for (const k of [...bucket.keys()]) if (bucketOf(k, tf) < t - TF[tf]) bucket.delete(k); // keep this and the previous bucket
-      bucket.set(b.t, b);
-      emit(t);
-    };
-    s.ex.history(s.b, s.q, src, { limit: TF[tf] / TF[src] + 1 }).then((seed) => {
-      if (stopped) return;
-      for (const b of seed) bucket.set(b.t, b);
-      stop = s.ex.stream(s.b, s.q, src, add, onStatus);
-    }).catch(() => { if (!stopped) stop = s.ex.stream(s.b, s.q, src, add, onStatus); });
-    return () => { stopped = true; if (stop) stop(); };
-  }
+  // Timeframes an exchange doesn't offer are built from smaller candles by data.js (history / stream).
+  const bucketOf = MD.bucketOf;
 
   // ---------------------------------------------------------------- symbol lists & search
   const lists = {};
@@ -627,7 +575,6 @@
     return s ? s.ex.ticker(s.b, s.q) : binanceTicker(sym);
   }
 
-  const tfLabel = (tf) => tf.replace(/h$/, 'H').replace(/d$/, 'D').replace(/w$/, 'W');
   const exchangeOf = (sym) => { const s = parse(sym); return s ? s.ex : null; };
   const exDisplay = (sym) => { const s = parse(sym); return s ? `${s.b}/${s.q}` : null; };
   // name for messages and lists: "BTC/USD (Kraken)", "NVDAB", "AAPL", "BTCUSDT"
@@ -639,9 +586,10 @@
   }
   const setProxy = (base, token = '') => { proxyBase = base; proxyToken = token; };
 
-  Object.assign(MD, {
-    EXCHANGES, exchangeOf, exDisplay, displayName, exPairs: pairs, searchPairs, samePairs, baseQuote, ticker, setProxy,
-    _exHistory: history, _exStream: stream, _resample: resample, _bucketOf: bucketOf,
+  Object.assign(MD, { EXCHANGES, exchangeOf, exDisplay, displayName, exPairs: pairs, searchPairs, samePairs, baseQuote, ticker, setProxy });
+  MD.registerSource((sym) => !!parse(sym), {
+    tfs: (sym) => Object.keys(parse(sym).ex.tfs),
+    history: (sym, tf, opts) => { const s = parse(sym); return s.ex.history(s.b, s.q, tf, opts); },
+    stream: (sym, tf, onBar, onStatus) => { const s = parse(sym); return s.ex.stream(s.b, s.q, tf, onBar, onStatus); },
   });
-  MD.registerSource((sym) => !!parse(sym), { history, stream, supportsTf: (sym, tf) => !!(parse(sym).ex.tfs[tf] || sourceTf(parse(sym).ex, tf)) });
 })(typeof window !== 'undefined' ? window : globalThis);

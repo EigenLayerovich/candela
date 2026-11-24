@@ -219,7 +219,10 @@ is meant for personal use.
   with a bar-close countdown; plus Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex (see above). **Stocks and ETFs** as Binance bStocks (free, live, no key) or via
   Twelve Data with forex too (free key); see above.
   Scroll or zoom left and older history loads automatically.
-- **Timeframes**: 1m 3m 5m 15m 30m 1H 2H 4H 6H 12H 1D 3D 1W
+- **Timeframes**: 1m 3m 5m 15m 30m 1H 2H 4H 6H 8H 12H 1D 3D 1W 1M, plus **your own** (2D, 3H, 2W, 45m,
+  3M…): see *Custom timeframes* below. Works on every exchange.
+- **Indicators on another timeframe**: any built-in indicator can be calculated on a fixed timeframe
+  (e.g. a 200-day SMA that stays the same on 4H, weekly or monthly charts); see below.
 - **Multi-chart layouts**: 1 to 6 charts side by side, stacked, or in grids (2×2, 3×2, one large + two,
   and more). Each chart has its own symbol, timeframe, chart type, indicators and live feed. Optional
   sync of symbol, timeframe, crosshair and date range across charts. Click a chart (or `Alt+1`…`Alt+6`)
@@ -254,6 +257,33 @@ is meant for personal use.
 - Light/dark theme, PNG snapshot of the whole layout, everything persisted in your browser.
 - Offline fallback: if Binance is unreachable it switches to a simulated demo feed.
 
+## Custom timeframes
+
+Open the **⋯** timeframe menu → *Custom…*, or just type a number on the chart (`2` → `2D` → Enter).
+Write a number and a unit: `m` minutes, `H` hours, `D` days, `W` weeks, `M` months; a plain number
+means minutes. Examples: `2D`, `3H`, `12H`, `2W`, `45`, `1M`, `3M` (quarters). Your timeframes are
+listed in the ⋯ menu; remove them in the same dialog.
+
+When an exchange doesn't offer a timeframe, Candela builds it from smaller candles (a 2D candle from two
+1D candles, a month from daily candles), live updates included. Days start at midnight UTC, weeks on
+Monday, months on the 1st. Intraday lengths that don't divide a day evenly (5H, 7H…) restart at midnight,
+so the last candle of each day is shorter. Stocks and forex can use custom timeframes of a day or more.
+
+## Indicators on another timeframe
+
+Every built-in indicator except Volume has a **Timeframe** setting (click its name in the legend):
+*Same as chart* (the default), any standard timeframe, or a custom one.
+
+Example: on a weekly Bitcoin chart, add *Moving Average (SMA)*, set Length to **200** and Timeframe
+to **1D**. The line is the 200-day average, and it stays the 200-day average when you switch the chart
+to 4H, 1D or 1M. The legend shows it as `SMA 200 · 1D`.
+
+How it's placed on the chart: each chart candle shows the value of the latest indicator-timeframe
+candle that started before it ended. On a 4H chart a daily SMA steps once a day; on a weekly chart each
+week shows the daily SMA as of its last day. On a lower-timeframe chart the current day's value moves
+with the live price until the day closes, as on other charting apps. It works for oscillators too
+(an RSI on 1D below a 1H chart). Custom scripts always use the chart's timeframe.
+
 ## Controls
 
 | Action | How |
@@ -264,6 +294,7 @@ is meant for personal use.
 | Reset view | `Alt+R`, double-click time axis, or the **reset** button |
 | Symbol search | just start typing a ticker |
 | Indicators | `/` |
+| Custom timeframe | type a number (`2`, then `D`, Enter = 2 days) |
 | Tools | `Alt+T` trend, `Alt+H` horizontal, `Alt+V` vertical, `Alt+F` fib, `Alt+M` measure |
 | Alert | `Alt+A`, or right-click the chart → *Add alert at …* |
 | Delete drawing | select it, then `Del` |

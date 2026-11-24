@@ -83,6 +83,7 @@
     stocks: { key: '', perMin: 8, perDay: 800 }, // Twelve Data (stocks, ETFs, forex)
     serverDeletes: [], serverScriptDeletes: [], // changes to send to the alert server when it is back
     exNotes: {}, searchSrc: 'ALL', showAcross: true,
+    customTfs: [], // your own timeframes: "2d", "3h", "2w"…
     watchlist: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'LINKUSDT', 'AVAXUSDT', 'LTCUSDT'],
   };
   function loadState() {
@@ -102,6 +103,12 @@
   const PREVIEW = !!window.CANDELA_PREVIEW;
   const state = loadState();
   if (!state.exNotes || typeof state.exNotes !== 'object') state.exNotes = {};
+  if (!Array.isArray(state.customTfs)) state.customTfs = [];
+  state.customTfs = state.customTfs.filter((tf) => MD.ensureTf(tf));
+  for (const c of state.charts) {
+    if (!MD.ensureTf(c.tf)) c.tf = '1h';
+    for (const i of c.indicators || []) if (i.tf && !MD.ensureTf(i.tf)) delete i.tf;
+  }
   // Opened from Candela's server (the Windows app or `node server.js`): exchanges that don't allow web
   // pages to load their data (KuCoin) go through the server.
   (() => {
@@ -164,7 +171,7 @@
       c.chartType = cfg.chartType || 'candles';
       for (const s of cfg.indicators || []) {
         const def = resolveDef(s.type);
-        if (def) c.addIndicator(def, s.params || {}, { colors: s.colors, visible: s.visible, weight: s.weight });
+        if (def) c.addIndicator(def, s.params || {}, { colors: s.colors, visible: s.visible, weight: s.weight, tf: s.tf });
       }
       c.percentMode = !!cfg.percent;
       c.onCompareAction = (act, id) => {
@@ -206,6 +213,8 @@
       this.noMore = false;
       this.status = 'loading';
       this.cmps = new Map(); // compare id -> { c, bars, interval, stop, noMore }
+      this.tfFeeds = new Map(); // timeframe -> candles for indicators set to another timeframe
+      c.tfKey = cfg.tf;
     }
 
     get symbol() { return this.cfg.symbol; }
@@ -215,6 +224,7 @@
       this.gen++;
       if (this.stop) this.stop();
       this.stopCompares();
+      this.stopTfFeeds();
       this.chart.destroy();
       this.el.remove();
     }
@@ -228,10 +238,82 @@
     persistIndicators() {
       const c = this.chart, order = (i) => c.panes.indexOf(i.pane);
       this.cfg.indicators = [...c.indicators].sort((a, b) => order(a) - order(b)).map((i) => ({
-        type: i.def.id, params: i.params, colors: i.colors, visible: i.visible,
+        type: i.def.id, params: i.params, colors: i.colors, visible: i.visible, tf: i.tf || undefined,
         weight: i.pane === c.main ? undefined : +i.pane.weight.toFixed(3),
       }));
       save();
+      if (this.status !== 'loading') this.syncTfFeeds();
+    }
+
+    // ---- indicators set to another timeframe (a daily SMA on a 4H chart…): that timeframe's candles
+    stopTfFeeds() {
+      for (const f of this.tfFeeds.values()) { f.dead = true; clearTimeout(f.retry); if (f.stop) f.stop(); }
+      this.tfFeeds.clear();
+    }
+    syncTfFeeds() {
+      const want = new Set(this.chart.neededTfs());
+      for (const [tf, f] of this.tfFeeds) if (!want.has(tf)) { f.dead = true; clearTimeout(f.retry); if (f.stop) f.stop(); this.tfFeeds.delete(tf); }
+      for (const tf of want) if (!this.tfFeeds.has(tf)) this.startTfFeed(tf);
+    }
+    setIndicatorTf(id, tf) {
+      this.chart.setIndicatorTf(id, tf);
+      this.syncTfFeeds();
+    }
+    async startTfFeed(tf) {
+      const c = this.chart, sym = this.symbol;
+      const f = { tf, bars: [], stop: null, dead: false, noMore: false, local: this.mode !== 'live', retry: null };
+      this.tfFeeds.set(tf, f);
+      const alive = () => !f.dead && this.tfFeeds.get(tf) === f;
+      if (f.local) {
+        // simulated or imported data: only longer timeframes, built from the chart's own candles
+        if (MD.TF[tf] <= c.interval) c.setTfSource(tf, null, `${tfName(tf)} needs live data (this chart's data is ${this.mode === 'csv' ? 'imported' : 'simulated'})`);
+        else { f.bars = MD.resample(c.bars, tf); c.setTfSource(tf, f.bars); }
+        return;
+      }
+      if (!MD.supportsTf(sym, tf)) { c.setTfSource(tf, null, `${tfName(tf)} isn't available for ${bare(sym)}`); return; }
+      c.setTfSource(tf, null); // loading
+      try {
+        f.bars = await MD.history(sym, tf, { limit: 1000 });
+      } catch (e) {
+        if (!alive()) return;
+        c.setTfSource(tf, null, e.fatal || e.budget || e.needsKey ? e.message : `couldn't load ${tfName(tf)} candles; retrying`);
+        if (!e.fatal) f.retry = setTimeout(() => { if (alive()) { this.tfFeeds.delete(tf); this.syncTfFeeds(); } }, 30000);
+        return;
+      }
+      if (!alive()) return;
+      c.setTfSource(tf, f.bars);
+      await this.fillTfHistory(f);
+      if (!alive()) return;
+      f.stop = MD.stream(sym, tf, (b) => {
+        if (!alive()) return;
+        const n = f.bars.length;
+        if (n && f.bars[n - 1].t === b.t) f.bars[n - 1] = b;
+        else if (!n || b.t > f.bars[n - 1].t) f.bars.push(b);
+        else { const i = f.bars.findIndex((x) => x.t === b.t); if (i < 0) return; f.bars[i] = b; }
+        c.setTfSource(tf, f.bars);
+      });
+    }
+    // older candles until they reach well before the chart's first bar (so a 200-day average is ready there)
+    async fillTfHistory(f) {
+      if (f.local || f.filling) return;
+      f.filling = true;
+      const stock = isStock(this.symbol);
+      try {
+        for (let k = 0; k < (stock ? 1 : 12) && !f.noMore && !f.dead && f.bars.length; k++) {
+          const main = this.chart.bars;
+          if (!main.length || f.bars[0].t <= main[0].t - 300 * MD.TF[f.tf]) break;
+          let older;
+          try { older = await MD.history(this.symbol, f.tf, { limit: stock ? 5000 : 1000, endTime: f.bars[0].t - 1 }); } catch (e) { break; }
+          if (f.dead) return;
+          const add = older.filter((b) => b.t < f.bars[0].t);
+          if (!add.length) { f.noMore = true; break; }
+          f.bars = add.concat(f.bars);
+          this.chart.setTfSource(f.tf, f.bars);
+        }
+      } finally { f.filling = false; }
+    }
+    refreshLocalTfs() {
+      for (const f of this.tfFeeds.values()) if (f.local && f.bars.length) { f.bars = MD.resample(this.chart.bars, f.tf); this.chart.setTfSource(f.tf, f.bars); }
     }
 
     title() {
@@ -246,6 +328,7 @@
 
     async load(sym, tf = this.tf) {
       const gen = ++this.gen, c = this.chart;
+      if (!MD.ensureTf(tf)) tf = '1h';
       if (!MD.supportsTf(sym, tf)) {
         const near = MD.nearestTf(sym, tf);
         toast(`${tfName(tf)} isn't available for stocks and forex, showing ${tfName(near)}.`, 'info', 3500);
@@ -255,8 +338,11 @@
       this.stop = null;
       c.live = false;
       this.stopCompares();
+      this.stopTfFeeds();
+      c.clearTfSources();
       this.cfg.symbol = sym;
       this.cfg.tf = tf;
+      c.tfKey = tf;
       // a symbol can't be compared with itself
       if ((this.cfg.compares || []).some((x) => x.symbol === sym)) this.cfg.compares = this.cfg.compares.filter((x) => x.symbol !== sym);
       save();
@@ -311,7 +397,7 @@
         }
       } else {
         try {
-          bars = await MD.klines(sym, tf, { limit: 1000 });
+          bars = await MD.history(sym, tf, { limit: 1000 });
           this.mode = 'live';
           if (!bars.length) throw Object.assign(new Error('No data'), { fatal: true });
         } catch (e) {
@@ -326,7 +412,7 @@
       }
       if (gen !== this.gen) return;
       c.title = this.title();
-      c.countdown = !isStock(sym); // stock bars don't close on the clock (sessions, closed markets)
+      c.countdown = !isStock(sym) && !/M$/.test(tf); // stock bars don't close on the clock (sessions, closed markets)
       c.setData(bars, interval, { resetView: true });
       if (this === active) updateHeader();
       if (this.mode === 'live') {
@@ -340,6 +426,7 @@
       const last = bars[bars.length - 1];
       if (last) { lastPx[sym] = last.c; if (this === active) updateDocTitle(); }
       this.startCompares();
+      this.syncTfFeeds();
       primeChartAlerts(this);
       if (MD.isBStock(sym) && !state.bstockNoteSeen) {
         state.bstockNoteSeen = true;
@@ -358,6 +445,7 @@
       const n = this.chart.bars.length;
       this.chart.updateBar(bar);
       if (this.chart.bars.length !== n) this.alignCompares();
+      if (this.mode !== 'live') this.refreshLocalTfs();
       markerAlertsOnChartBar(this, this.chart.bars.length !== n);
       checkAlerts(this.symbol, bar.c);
       if (this === active) updateDocTitle();
@@ -376,6 +464,7 @@
         if (older.length) {
           c.prependBars(older);
           this.alignCompares(); // bar indexes shifted
+          for (const f of this.tfFeeds.values()) this.fillTfHistory(f);
           for (const st of this.cmps.values()) this.fillCompareHistory(st).then(() => this.alignCompare(st));
         }
       } catch (e) { /* try again on next scroll */ } finally { this.loadingOlder = false; }
@@ -785,22 +874,100 @@
       s.load(s.symbol, tf);
     }
     if (skipped) toast('Imported CSV data has a fixed timeframe.', 'warn');
-    if (noStock) toast(`${tfName(tf)} isn't available for stocks and forex (Twelve Data offers 1m, 5m, 15m, 30m, 1H, 2H, 4H, 1D, 1W).`, 'warn', 5000);
+    if (noStock) toast(`${tfName(tf)} isn't available for stocks and forex. They have 1m, 5m, 15m, 30m, 1H, 2H, 4H, 1D, 1W, 1M, and custom timeframes of a day or more (2D, 2W, 3M…).`, 'warn', 6000);
     updateHeader();
   }
 
   // ------------------------------------------------------------------ header
   const MAIN_TFS = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'];
-  const MORE_TFS = ['3m', '30m', '2h', '6h', '12h', '3d'];
-  const tfName = (tf) => tf.replace(/h$/, 'H').replace(/d$/, 'D').replace(/w$/, 'W');
+  const MORE_TFS = ['3m', '30m', '2h', '6h', '8h', '12h', '3d', '1M'];
+  const STD_TFS = [...MAIN_TFS, ...MORE_TFS];
+  const tfName = (tf) => MD.tfLabel(tf);
+  const byLength = (a, b) => MD.TF[a] - MD.TF[b];
+
+  // the ⋯ menu: more timeframes, your own ones, and "Custom…"
+  function fillMoreTfs() {
+    const more = $('#tfMore');
+    more.innerHTML = '';
+    more.appendChild(h('option', { value: '' }, '⋯'));
+    for (const tf of MORE_TFS) more.appendChild(h('option', { value: tf }, tfName(tf)));
+    // custom timeframes, plus any a chart uses that was since removed from the list
+    const extra = [...new Set([...state.customTfs, ...slots.map((s) => s.tf)])].filter((tf) => !STD_TFS.includes(tf)).sort(byLength);
+    if (extra.length) more.appendChild(h('optgroup', { label: 'Custom' }, extra.map((tf) => h('option', { value: tf }, tfName(tf)))));
+    more.appendChild(h('option', { value: '__custom' }, 'Custom…'));
+  }
+  function addCustomTf(tf) {
+    MD.ensureTf(tf);
+    if (STD_TFS.includes(tf) || state.customTfs.includes(tf)) return;
+    state.customTfs.push(tf);
+    state.customTfs.sort(byLength);
+    if (state.customTfs.length > 24) state.customTfs.shift();
+    save();
+    fillMoreTfs();
+    updateHeader();
+  }
+  // "Custom timeframe" dialog. onPick (optional) receives the timeframe instead of switching the chart to it.
+  function openCustomTfDialog(prefill = '', onPick = null) {
+    const input = h('input', { class: 'search', value: prefill, placeholder: 'e.g. 2D, 3H, 12H, 2W, 45 (minutes), 1M (month)', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Timeframe' });
+    const msg = h('p', { class: 'muted tf-help' }, 'A number and a unit: m minutes, H hours, D days, W weeks, M months. A plain number means minutes.');
+    const list = h('div', { class: 'tf-chips' });
+    const pick = (tf) => { close(); if (onPick) onPick(tf); else changeTf(tf); };
+    const renderList = () => {
+      list.innerHTML = '';
+      if (!state.customTfs.length) { list.appendChild(h('span', { class: 'muted' }, 'None yet.')); return; }
+      for (const tf of state.customTfs) {
+        list.appendChild(h('span', { class: 'tf-chip' },
+          h('button', { class: 'chip', title: onPick ? `Use ${tfName(tf)}` : `Show ${tfName(tf)}`, onclick: () => pick(tf) }, tfName(tf)),
+          h('button', { class: 'tf-chip-x', title: 'Remove from the list', onclick: () => {
+            state.customTfs = state.customTfs.filter((x) => x !== tf);
+            save(); fillMoreTfs(); updateHeader(); renderList();
+          } }, '✕')));
+      }
+    };
+    const preview = () => {
+      const tf = MD.normalizeTf(input.value);
+      msg.classList.toggle('err', !!input.value.trim() && !tf);
+      msg.textContent = !input.value.trim() ? 'A number and a unit: m minutes, H hours, D days, W weeks, M months. A plain number means minutes.'
+        : tf ? `${tfName(tf)}: ${describeTf(tf)}` : `Candela doesn't understand "${input.value.trim()}". Try 2D, 3H, 2W or 1M (up to 1440m, 168H, 365D, 52W, 12M).`;
+    };
+    const add = () => {
+      const tf = MD.normalizeTf(input.value);
+      if (!tf) { preview(); input.focus(); return; }
+      addCustomTf(tf);
+      pick(tf);
+    };
+    input.addEventListener('input', preview);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+    renderList();
+    const { close } = openModal('Custom timeframe', h('div', {}, input, msg, h('div', { class: 'list-group' }, 'Your timeframes'), list), {
+      footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: add }, onPick ? 'Use' : 'Show chart')],
+    });
+    preview();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+  function describeTf(tf) {
+    const p = MD.parseTf(tf), unit = { m: 'minute', h: 'hour', d: 'day', w: 'week', M: 'month' }[p.unit];
+    const what = `${p.n} ${unit}${p.n > 1 ? 's' : ''} per candle`;
+    if (p.unit === 'M') return what + (p.n === 3 ? ' (quarters)' : '') + ', starting on the 1st';
+    if (p.unit === 'w') return what + ', starting on Mondays';
+    if (p.unit === 'd' && p.n > 1) return what;
+    if (p.unit === 'd') return what + ', midnight to midnight UTC';
+    if (86400e3 % p.ms !== 0) return what + ' (the last one each day is shorter: candles restart at midnight UTC)';
+    return what;
+  }
 
   function buildHeader() {
     const g = $('#tfGroup');
     for (const tf of MAIN_TFS) g.appendChild(h('button', { class: 'tf', 'data-tf': tf, onclick: () => changeTf(tf) }, tfName(tf)));
     const more = $('#tfMore');
-    more.appendChild(h('option', { value: '' }, '⋯'));
-    for (const tf of MORE_TFS) more.appendChild(h('option', { value: tf }, tfName(tf)));
-    more.addEventListener('change', () => { if (more.value) changeTf(more.value); });
+    fillMoreTfs();
+    more.addEventListener('change', () => {
+      const v = more.value;
+      if (v === '__custom') { updateHeader(); openCustomTfDialog(); }
+      else if (v) changeTf(v);
+      more.blur();
+    });
 
     $('#symbolBtn').addEventListener('click', () => openSymbolSearch());
     $('#status').addEventListener('click', () => { if (['needskey', 'limit', 'polling'].includes(active.status)) openStockSettings(); });
@@ -854,9 +1021,12 @@
       b.classList.toggle('na', !MD.supportsTf(sym, b.dataset.tf));
     }
     const more = $('#tfMore');
-    for (const o of more.options) if (o.value) o.disabled = !MD.supportsTf(sym, o.value);
-    more.value = !csv && MORE_TFS.includes(tf) ? tf : '';
-    more.classList.toggle('active', !csv && MORE_TFS.includes(tf));
+    if (!csv && !STD_TFS.includes(tf) && ![...more.options].some((o) => o.value === tf)) fillMoreTfs();
+    for (const o of more.options) if (o.value && o.value !== '__custom') o.disabled = !csv && !MD.supportsTf(sym, o.value);
+    const inMore = !csv && !MAIN_TFS.includes(tf);
+    more.value = inMore ? tf : '';
+    more.classList.toggle('active', inMore);
+    more.classList.toggle('wide', inMore && tfName(tf).length > 3);
     $('#chartType').value = active.cfg.chartType || 'candles';
     $('#logBtn').classList.toggle('active', !!active.cfg.log);
     const comparing = active.chart.compares.some((c) => c.visible);
@@ -1349,6 +1519,47 @@
     const apply = () => chart.updateIndicator(id, params, colors);
 
     const inputsBox = h('div', { class: 'form' });
+    // compute on another timeframe (not for volume, which belongs to the chart's own candles, or scripts)
+    const tfOrig = ind.tf || null;
+    if (!def.script && def.id !== 'vol') {
+      const IND_TFS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '3d', '1w', '1M'];
+      const sel = h('select', {});
+      const fill = () => {
+        sel.innerHTML = '';
+        sel.appendChild(h('option', { value: '' }, `Same as chart (${tfName(slot.tf)})`));
+        const list = [...new Set([...IND_TFS, ...state.customTfs, ...(ind.tf ? [ind.tf] : [])])].sort(byLength);
+        for (const tf of list) sel.appendChild(h('option', { value: tf, disabled: !slot.symbol.startsWith('CSV:') && !isDemo(slot.symbol) && !MD.supportsTf(slot.symbol, tf) }, tfName(tf)));
+        sel.appendChild(h('option', { value: '__custom' }, 'Custom…'));
+        sel.value = ind.tf || '';
+      };
+      const custom = h('input', { class: 'tf-custom', placeholder: 'e.g. 2D, 3H, 2W', spellcheck: 'false', hidden: true });
+      const note = h('p', { class: 'muted tf-help' });
+      const showNote = () => {
+        note.textContent = ind.tf && ind.tf !== slot.tf
+          ? `Calculated on ${tfName(ind.tf)} candles, whatever timeframe the chart shows. E.g. SMA 200 on 1D is the 200-day average on a 4H or a weekly chart.`
+          : 'Calculate on another timeframe: e.g. pick 1D for a 200-day average that stays the same on 4H, weekly or any chart.';
+      };
+      const setTf = (tf) => { slot.setIndicatorTf(id, tf || null); fill(); showNote(); };
+      sel.addEventListener('change', () => {
+        if (sel.value === '__custom') { custom.hidden = false; custom.focus(); sel.value = ind.tf || ''; return; }
+        custom.hidden = true;
+        setTf(sel.value);
+      });
+      custom.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.stopPropagation();
+        const tf = MD.normalizeTf(custom.value);
+        if (!tf) { custom.classList.add('bad'); return; }
+        custom.classList.remove('bad');
+        addCustomTf(tf);
+        custom.hidden = true;
+        setTf(tf);
+      });
+      fill();
+      showNote();
+      inputsBox.appendChild(h('label', {}, h('span', {}, 'Timeframe'), h('span', { class: 'tf-pick' }, sel, custom)));
+      inputsBox.appendChild(note);
+    }
     for (const inp of def.inputs) {
       let ctl;
       if (inp.type === 'source' || inp.type === 'select') {
@@ -1405,6 +1616,7 @@
         Object.assign(params, IND.defaults(def));
         for (const k of Object.keys(colors)) delete colors[k];
         apply();
+        slot.setIndicatorTf(id, null);
         openIndicatorSettings(slot, id);
       } }, 'Defaults'),
       def.script ? h('button', { class: 'btn ghost', onclick: () => { committed = true; slot.persistIndicators(); openScriptEditor(def.scriptId); } }, 'Edit script') : null,
@@ -1414,7 +1626,7 @@
     ];
     const m = openModal(def.name, body, {
       footer,
-      onClose: () => { if (!committed) chart.updateIndicator(id, orig.params, orig.colors); },
+      onClose: () => { if (!committed) { chart.updateIndicator(id, orig.params, orig.colors); if ((ind.tf || null) !== tfOrig) slot.setIndicatorTf(id, tfOrig); } },
     });
   }
 
@@ -2650,7 +2862,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     }
     if (e.ctrlKey || e.metaKey) return;
     if (e.key === '/') { e.preventDefault(); openIndicatorPicker(); return; }
-    if (/^[a-zA-Z]$/.test(e.key)) { e.preventDefault(); openSymbolSearch(e.key.toUpperCase()); }
+    if (/^[a-zA-Z]$/.test(e.key)) { e.preventDefault(); openSymbolSearch(e.key.toUpperCase()); return; }
+    if (/^[1-9]$/.test(e.key)) { e.preventDefault(); openCustomTfDialog(e.key); } // type a timeframe: 2D, 4H…
   });
 
   // keep the bar-close countdowns ticking

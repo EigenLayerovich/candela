@@ -147,6 +147,7 @@ const activeMarkerAlerts = () => db.alerts.filter((a) => AL.isMarker(a) && a.act
 const alertsOnFeed = (f) => activeMarkerAlerts().filter((a) => a.symbol === f.symbol && a.tf === f.tf);
 
 function syncFeeds() {
+  for (const a of db.alerts) if (a.tf) MD.ensureTf(a.tf); // custom timeframes
   const want = new Set(activeMarkerAlerts().map(feedKey));
   for (const [k, f] of feeds) if (!want.has(k)) { f.dead = true; clearTimeout(f.timer); feeds.delete(k); }
   for (const k of want) {
@@ -360,7 +361,8 @@ async function makeAlert(b) {
   if (num(b.lastFired)) base.lastFired = b.lastFired;
   if (num(b.triggeredAt)) base.triggeredAt = b.triggeredAt;
   if (b.kind === 'marker') {
-    if (!MD.TF[b.tf]) throw new BadRequest('Unknown timeframe');
+    if (typeof b.tf !== 'string' || !MD.ensureTf(b.tf)) throw new BadRequest('Unknown timeframe'); // standard or custom (2d, 3h…)
+    if (!MD.supportsTf(b.symbol, b.tf)) throw new BadRequest(`The ${b.tf} timeframe is not available for ${b.symbol}`);
     if (!str(b.scriptId, 40) || !str(b.markKey, 20) || !str(b.markName) || !str(b.scriptName)) throw new BadRequest('Incomplete marker alert');
     return {
       ...base, kind: 'marker', tf: b.tf, scriptId: b.scriptId, scriptName: b.scriptName, markKey: b.markKey, markName: b.markName,

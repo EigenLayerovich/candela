@@ -8,6 +8,7 @@
     '1m': 60e3, '3m': 180e3, '5m': 300e3, '15m': 900e3, '30m': 1800e3,
     '1h': 3600e3, '2h': 7200e3, '4h': 14400e3, '6h': 21600e3, '12h': 43200e3,
     '1d': 86400e3, '3d': 259200e3, '1w': 604800e3,
+    '8h': 28800e3, '1M': 2592000e3, // (a month counts as 30 days where a length is needed)
   };
 
   // data-api.binance.vision is Binance's market-data-only mirror and works in more regions.
@@ -31,7 +32,7 @@
   }
 
   async function klines(symbol, tf, { limit = 1000, endTime } = {}) {
-    let q = `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${tf}&limit=${limit}`;
+    let q = `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${tf}&limit=${Math.min(1000, limit)}`;
     if (endTime) q += `&endTime=${Math.floor(endTime)}`;
     let rows;
     try { rows = await getJSON(q); } catch (e) {
@@ -203,7 +204,7 @@
   // The free plan allows 8 requests a minute and 800 a day, so every request goes through a budget:
   // chart loads come first, live updates next, background refreshes (watchlist, alerts) last.
   const TD_BASE = 'https://api.twelvedata.com';
-  const TD_TF = { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '1h', '2h': '2h', '4h': '4h', '1d': '1day', '1w': '1week' };
+  const TD_TF = { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '1h', '2h': '2h', '4h': '4h', '1d': '1day', '1w': '1week', '1M': '1month' };
   const isStock = (sym) => typeof sym === 'string' && sym.startsWith('TD:');
   function parseStock(sym) {
     const [symbol, exchange] = sym.slice(3).split('@');
@@ -429,37 +430,161 @@
   const bStockFor = (ticker) => { const p = String(ticker).toUpperCase().replace(/[^A-Z0-9]/g, '') + 'BUSDT'; return bstocks && bstocks[p] && bstocks[p].trading ? p : null; };
   const bStockList = () => (bstocks ? Object.keys(bstocks).filter((p) => bstocks[p].trading) : []);
 
+  // ---------- timeframes: the standard ones plus any you make (2D, 3H, 2W, 1M…) ----------
+  // Written as a number and a unit: m minutes, h hours, d days, w weeks, M months ("45m", "3h", "2d", "2w", "1M").
+  const DAY = 86400e3;
+  const UNIT_MS = { m: 60e3, h: 3600e3, d: DAY, w: 7 * DAY, M: 30 * DAY };
+  const UNIT_MAX = { m: 1440, h: 168, d: 365, w: 52, M: 12 };
+  function parseTf(tf) {
+    const m = /^(\d{1,4})(m|h|d|w|M)$/.exec(String(tf || ''));
+    if (!m || +m[1] < 1 || +m[1] > UNIT_MAX[m[2]]) return null;
+    return { n: +m[1], unit: m[2], ms: +m[1] * UNIT_MS[m[2]] };
+  }
+  // make sure TF has an entry for tf (custom timeframes are added on first use); false if tf is not valid
+  function ensureTf(tf) {
+    if (TF[tf]) return true;
+    const p = parseTf(tf);
+    if (!p) return false;
+    TF[tf] = p.ms;
+    return true;
+  }
+  // what someone typed ("2D", "12H", "90", "2 weeks", "1 month") → "2d", "12h", "90m", "2w", "1M"; null if not understood
+  function normalizeTf(text) {
+    const m = /^\s*(\d{1,4})\s*([a-zA-Z]*)\s*$/.exec(String(text || ''));
+    if (!m) return null;
+    let n = +m[1];
+    const u = m[2], ul = u.toLowerCase();
+    let unit;
+    if (u === '' || u === 'm' || /^min/.test(ul)) unit = 'm';
+    else if (u === 'M' || /^mo/.test(ul)) unit = 'M';
+    else if (/^h/.test(ul)) unit = 'h';
+    else if (/^d/.test(ul)) unit = 'd';
+    else if (/^w/.test(ul)) unit = 'w';
+    else return null;
+    // the simplest name for the same length: 60m → 1h, 24h → 1d, 14d → 2w
+    if (unit === 'm' && n % 60 === 0) { n /= 60; unit = 'h'; }
+    if (unit === 'h' && n % 24 === 0) { n /= 24; unit = 'd'; }
+    if (unit === 'd' && n % 7 === 0) { n /= 7; unit = 'w'; }
+    const tf = n + unit;
+    return parseTf(tf) ? tf : null;
+  }
+  // "3h" → "3H", "2d" → "2D", "1M" → "1M", "45m" → "45m"
+  const tfLabel = (tf) => tf.replace(/h$/, 'H').replace(/d$/, 'D').replace(/w$/, 'W');
+
+  // Start of the candle that contains time t. Days and longer start at midnight UTC; weeks on Monday;
+  // months on the 1st (3M = quarters). Intraday lengths that don't fit a day evenly (5H, 7H…) restart each day.
+  const MONDAY = 4 * DAY; // 1970-01-01 was a Thursday
+  function bucketOf(t, tf) {
+    const p = parseTf(tf);
+    if (!p) return t;
+    if (p.unit === 'M') {
+      const d = new Date(t), k = d.getUTCFullYear() * 12 + d.getUTCMonth(), s = Math.floor(k / p.n) * p.n;
+      return Date.UTC(Math.floor(s / 12), s % 12, 1);
+    }
+    if (p.unit === 'w') return Math.floor((t - MONDAY) / p.ms) * p.ms + MONDAY;
+    if (p.unit === 'd' || p.ms >= DAY || DAY % p.ms === 0) return Math.floor(t / p.ms) * p.ms;
+    const day = Math.floor(t / DAY) * DAY;
+    return day + Math.floor((t - day) / p.ms) * p.ms;
+  }
+  // can candles of timeframe s be combined into tf candles (each s candle lies inside one tf candle)?
+  function nests(s, tf) {
+    const a = parseTf(s), b = parseTf(tf);
+    if (!a || !b || a.ms >= b.ms) return false;
+    const inDay = DAY % a.ms === 0; // s candles never cross midnight
+    if (b.unit === 'M') return inDay || (a.unit === 'M' && b.n % a.n === 0);
+    if (b.unit === 'w') return inDay || (a.unit === 'w' && b.n % a.n === 0);
+    if (a.unit === 'M' || a.unit === 'w') return false;
+    return b.ms % a.ms === 0 && (inDay || a.unit === 'd');
+  }
+  function resample(bars, tf) {
+    const out = [];
+    for (const b of bars) {
+      const t = bucketOf(b.t, tf), last = out[out.length - 1];
+      if (last && last.t === t) { last.h = Math.max(last.h, b.h); last.l = Math.min(last.l, b.l); last.c = b.c; last.v += b.v; }
+      else out.push({ t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v });
+    }
+    return out;
+  }
+
   // ---------- one entry point for every kind of symbol ----------
-  // other data sources (more exchanges, see exchanges.js) register here: { history, stream, supportsTf }
+  // A source offers some timeframes natively ({ tfs, history, stream }); every other timeframe is built
+  // from the largest native one that fits. More exchanges register themselves (see exchanges.js).
+  const BINANCE_TFS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'];
   const sources = [];
-  const registerSource = (test, src) => sources.push({ test, ...src });
-  const sourceOf = (sym) => sources.find((s) => s.test(sym)) || null;
-  function history(sym, tf, opts = {}) {
+  const registerSource = (test, src) => sources.unshift({ test, ...src });
+  sources.push(
+    { test: isStock, tfs: () => Object.keys(TD_TF), history: stockBars, stream: stockStream, buildMin: DAY }, // stock sessions: only build from daily candles
+    { test: () => true, tfs: () => BINANCE_TFS, history: klines, stream: klineStream },
+  );
+  const sourceOf = (sym) => sources.find((s) => s.test(sym));
+  function buildFrom(sym, tf) {
     const src = sourceOf(sym);
-    if (src) return src.history(sym, tf, opts);
-    return isStock(sym) ? stockBars(sym, tf, opts) : klines(sym, tf, opts);
+    if (!ensureTf(tf)) return null;
+    return src.tfs(sym).filter((s) => ensureTf(s) && nests(s, tf) && TF[s] >= (src.buildMin || 0)).sort((a, b) => TF[b] - TF[a])[0] || null;
   }
+  const isNative = (sym, tf) => sourceOf(sym).tfs(sym).includes(tf);
+  const supportsTf = (sym, tf) => ensureTf(tf) && (isNative(sym, tf) || !!buildFrom(sym, tf));
+  // the longest a tf candle can be, in src candles (months have up to 31 days)
+  const perBucket = (tf, src) => Math.ceil((parseTf(tf).unit === 'M' ? parseTf(tf).n * 31 * DAY : TF[tf]) / TF[src]);
+
+  async function history(sym, tf, opts = {}) {
+    const source = sourceOf(sym);
+    if (!ensureTf(tf)) throw Object.assign(new Error(`Unknown timeframe ${tf}`), { fatal: true });
+    if (isNative(sym, tf)) return source.history(sym, tf, opts);
+    const src = buildFrom(sym, tf);
+    if (!src) throw Object.assign(new Error(`${tfLabel(tf)} isn't available for this symbol`), { fatal: true, badTf: true });
+    const { limit = 1000, endTime } = opts;
+    const want = Math.min(4000, limit * perBucket(tf, src) + perBucket(tf, src));
+    // fetch the smaller candles, a page at a time (sources return at most 1000–10000 per request)
+    let bars = [], end = endTime;
+    for (let k = 0; k < 8 && bars.length < want; k++) {
+      const chunk = await source.history(sym, src, { ...opts, limit: want - bars.length, endTime: end });
+      const older = bars.length ? chunk.filter((b) => b.t < bars[0].t) : chunk;
+      if (!older.length) break;
+      bars = older.concat(bars);
+      end = bars[0].t - 1;
+    }
+    const out = resample(bars, tf);
+    if (out.length && bars.length && bars[0].t > out[0].t) out.shift(); // the oldest candle would be incomplete
+    return out.slice(-limit);
+  }
+
   function stream(sym, tf, onBar, onStatus) {
-    const src = sourceOf(sym);
-    if (src) return src.stream(sym, tf, onBar, onStatus);
-    return isStock(sym) ? stockStream(sym, tf, onBar, onStatus) : klineStream(sym, tf, onBar, onStatus);
+    const source = sourceOf(sym);
+    ensureTf(tf);
+    if (isNative(sym, tf)) return source.stream(sym, tf, onBar, onStatus);
+    const src = buildFrom(sym, tf);
+    if (!src) return () => {};
+    // follow the smaller candles of the current (and previous) tf candle and combine them
+    const parts = new Map();
+    let stopped = false, stop = null;
+    const add = (b) => {
+      const t = bucketOf(b.t, tf), prev = bucketOf(t - 1, tf);
+      for (const k of [...parts.keys()]) if (bucketOf(k, tf) < prev) parts.delete(k);
+      parts.set(b.t, b);
+      const mine = [...parts.values()].filter((x) => bucketOf(x.t, tf) === t).sort((x, y) => x.t - y.t);
+      if (mine.length) onBar(resample(mine, tf)[0]);
+    };
+    const go = () => { if (!stopped) stop = source.stream(sym, src, add, onStatus); };
+    source.history(sym, src, { limit: perBucket(tf, src) + 1, priority: 'live' }).then((seed) => {
+      if (stopped) return;
+      for (const b of seed) parts.set(b.t, b);
+      go();
+    }, go);
+    return () => { stopped = true; if (stop) stop(); };
   }
-  function supportsTf(sym, tf) {
-    const src = sourceOf(sym);
-    if (src) return src.supportsTf(sym, tf);
-    return !isStock(sym) || !!TD_TF[tf];
-  }
+
   // the supported timeframe closest to tf (for comparing a stock on a crypto chart, say)
   function nearestTf(sym, tf) {
     if (supportsTf(sym, tf)) return tf;
-    if (sourceOf(sym)) return Object.keys(TF).filter((k) => supportsTf(sym, k)).reduce((best, k) => (Math.abs(Math.log(TF[k] / TF[tf])) < Math.abs(Math.log(TF[best] / TF[tf])) ? k : best), '1h');
-    const want = TF[tf];
-    return Object.keys(TD_TF).reduce((best, k) => (Math.abs(Math.log(TF[k] / want)) < Math.abs(Math.log(TF[best] / want)) ? k : best), '1h');
+    const want = TF[tf] || 3600e3;
+    return Object.keys(TF).filter((k) => supportsTf(sym, k)).reduce((best, k) => (Math.abs(Math.log(TF[k] / want)) < Math.abs(Math.log(TF[best] / want)) ? k : best), '1d');
   }
 
   window.MarketData = {
     TF, klines, allSymbols, tickers24, klineStream, tickerStream, demoBars, demoStream, parseCSV,
-    history, stream, supportsTf, nearestTf, registerSource,
+    history, stream, supportsTf, nearestTf, registerSource, isNative,
+    parseTf, ensureTf, normalizeTf, tfLabel, bucketOf, resample, nests,
     isStock, isForex, parseStock, stockLabel, stockMeta: (sym) => td.meta[sym] || null, stockConfig, stockUsage,
     stockQuotes, searchStocks, checkStockKey, marketOpen, pollPeriod, onStockUsage: (fn) => { td.onUsage = fn; }, STOCK_TF: TD_TF,
     loadBStocks, isBStock, bStockTicker, bStockFor, bStockList,

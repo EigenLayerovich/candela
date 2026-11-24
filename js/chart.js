@@ -58,6 +58,27 @@
     t = clamp(t, 0, 1);
     return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
   }
+  // Indicator values computed on another timeframe's candles, placed on the chart's bars: each chart bar
+  // shows the value of the latest of those candles that started before the chart bar ended. So a daily SMA
+  // on a 4H chart steps once a day, and on a weekly chart each week shows the SMA as of its last day.
+  function mapToBars(chartBars, srcBars, srcOut) {
+    const n = chartBars.length, idx = new Int32Array(n);
+    let j = -1;
+    for (let i = 0; i < n; i++) {
+      const end = i + 1 < n ? chartBars[i + 1].t : Infinity;
+      while (j + 1 < srcBars.length && srcBars[j + 1].t < end) j++;
+      idx[i] = j;
+    }
+    const out = {};
+    for (const [k, arr] of Object.entries(srcOut)) {
+      if (!arr || typeof arr !== 'object' || arr.length !== srcBars.length) { out[k] = arr; continue; }
+      const m = new Array(n);
+      for (let i = 0; i < n; i++) m[i] = idx[i] >= 0 ? arr[idx[i]] : NaN;
+      out[k] = m;
+    }
+    return out;
+  }
+
   function heikinAshi(bars) {
     const out = new Array(bars.length);
     for (let i = 0; i < bars.length; i++) {
@@ -84,6 +105,8 @@
       this.bars = [];
       this.ha = null;
       this.interval = 3600e3;
+      this.tfKey = null;      // the chart's timeframe ("1h"), set by the app
+      this.tfSources = {};    // candles of other timeframes for indicators that use one: tf -> { bars, error }
       this.decimals = 2;
       this.spacing = 8;
       this.rightOffset = 6;
@@ -282,6 +305,7 @@
         id: opts.id || uid(), def,
         params: { ...window.Indicators.defaults(def), ...params },
         colors: { ...(opts.colors || {}) }, visible: opts.visible !== false, out: {},
+        tf: opts.tf || null, // compute on another timeframe's candles (e.g. a daily SMA on a 4H chart)
       };
       if (def.overlay) ind.pane = this.main;
       else {
@@ -316,8 +340,42 @@
       this.invalidate();
     }
 
+    // the timeframe an indicator is computed on, when it isn't the chart's own
+    indicatorTf(ind) { return ind.tf && ind.tf !== this.tfKey ? ind.tf : null; }
+    neededTfs() { return [...new Set(this.indicators.map((i) => this.indicatorTf(i)).filter(Boolean))]; }
+
+    setIndicatorTf(id, tf) {
+      const ind = this.indicators.find((i) => i.id === id);
+      if (!ind) return;
+      ind.tf = tf || null;
+      this._calc(ind);
+      this._buildLegends();
+      this.invalidate();
+    }
+
+    // candles for indicators on timeframe tf (bars = null while loading, or with an error message)
+    setTfSource(tf, bars, error = null) {
+      const had = this.tfSources[tf];
+      this.tfSources[tf] = { bars, error };
+      let rebuild = !had || !!had.error !== !!error;
+      for (const ind of this.indicators) if (this.indicatorTf(ind) === tf) this._calc(ind);
+      if (rebuild) this._buildLegends();
+      this._legendIdx = -2;
+      this._updateLegendValues();
+      this.invalidate();
+    }
+    clearTfSources() { this.tfSources = {}; }
+
     _calc(ind) {
       try {
+        const tf = this.indicatorTf(ind);
+        if (tf) {
+          const src = this.tfSources[tf];
+          ind.out = {};
+          ind.error = src && src.error ? src.error : null;
+          if (src && src.bars && src.bars.length) ind.out = mapToBars(this.bars, src.bars, ind.def.calc(src.bars, ind.params) || {});
+          return;
+        }
         ind.out = ind.def.calc(this.bars, ind.params) || {};
         ind.error = null;
       } catch (e) {
@@ -365,7 +423,8 @@
 
     indicatorLabel(ind) {
       const vals = ind.def.inputs.map((inp) => ind.params[inp.key]).filter((v) => v !== 'close');
-      return ind.def.short + (vals.length ? ' ' + vals.join(' ') : '');
+      const tf = ind.tf ? ' · ' + ind.tf.replace(/h$/, 'H').replace(/d$/, 'D').replace(/w$/, 'W') : '';
+      return ind.def.short + (vals.length ? ' ' + vals.join(' ') : '') + tf;
     }
 
     plotColor(ind, pl) { return ind.colors[pl.key] || pl.color || (pl.palette && pl.palette[0]) || '#888'; }

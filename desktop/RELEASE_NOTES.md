@@ -1,4 +1,8 @@
-## New in 1.2.0
+## New in 1.3.0
+
+- **Bitget and MEXC** added, for nine crypto exchanges in all: charts with every timeframe, live updates, watchlist, comparisons, alerts, and the *Across exchanges* panel. MEXC, like KuCoin, works in this app but not in a plain browser tab.
+
+## In 1.2.0
 
 - **OKX and Gate.io** join Binance, Bybit, KuCoin, Kraken and Coinbase: charts with every timeframe, live updates, watchlist, comparisons, alerts, and the *Across exchanges* panel.
 

@@ -1,11 +1,11 @@
-/* Candela — more crypto exchanges: Bybit, OKX, KuCoin, Gate.io, Kraken and Coinbase (Binance lives in data.js).
+/* Candela — more crypto exchanges: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, Kraken and Coinbase (Binance lives in data.js).
  *
  * Symbols are written EXCHANGE:BASE/QUOTE, e.g. "KRAKEN:BTC/USD", "KUCOIN:ETH/USDT". Every exchange gets
  * the same five operations: symbol list, candle history, live updates, a 24-hour ticker, and the candle
  * intervals it offers. Timeframes an exchange lacks (Coinbase has no 4H, Kraken no 2H…) are built from
  * smaller candles, so every exchange supports every timeframe.
  *
- * Browser access: Kraken and Coinbase allow web pages to call them. KuCoin doesn't, so it goes through
+ * Browser access: most exchanges allow web pages to call them. KuCoin and MEXC don't, so they go through
  * Candela's server (the Windows app and `node server.js` have one); Bybit is tried directly first. */
 (function (root) {
   'use strict';
@@ -94,11 +94,13 @@
   async function pages({ limit = 1000, endTime } = {}, per, fetchPage) {
     const out = new Map();
     let end = endTime;
-    for (let k = 0, max = Math.min(12, Math.ceil(limit / per) + 1); out.size < limit && k < max; k++) {
-      const n = Math.min(per, limit - out.size), rows = await fetchPage(n, end);
+    const perPage = (e) => (typeof per === 'function' ? per(e) : per); // may differ for the latest page
+    for (let k = 0, max = Math.min(12, Math.ceil(limit / perPage(1)) + 1); out.size < limit && k < max; k++) {
+      const n = Math.min(perPage(end), limit - out.size), rows = await fetchPage(n, end);
       let oldest = Infinity;
       for (const r of rows) { if (!endTime || r.t <= endTime) out.set(r.t, r); oldest = Math.min(oldest, r.t); }
-      if (rows.length < n - 1 || !isFinite(oldest)) break;
+      // a short page from the archive means the start of the history (the latest page can be short on some exchanges)
+      if (!isFinite(oldest) || (end && rows.length < n - 1)) break;
       end = oldest - 1;
     }
     return sortAsc([...out.values()]).slice(-limit);
@@ -324,8 +326,74 @@
     },
   };
 
-  const EXCHANGES = { BYBIT, OKX, KUCOIN, GATE, KRAKEN, COINBASE };
-  const ID_RE = /^(BYBIT|OKX|KUCOIN|GATE|KRAKEN|COINBASE):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
+  // ---------------------------------------------------------------- Bitget
+  const BITGET = {
+    id: 'BITGET', name: 'Bitget', tag: 'BG', cors: true, rest: 'https://api.bitget.com',
+    // the "utc" candles start at midnight UTC
+    tfs: { '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min', '1h': '1h', '4h': '4h', '6h': '6Hutc', '12h': '12Hutc', '1d': '1Dutc', '1w': '1Wutc' },
+    ws: { '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1H', '4h': '4H', '6h': '6Hutc', '12h': '12Hutc', '1d': '1Dutc', '1w': '1Wutc' },
+    ok(j) { if (j.code !== '00000') throw err(`Bitget: ${j.msg || j.code}`, { fatal: true }); return j.data; },
+    async pairs() {
+      return this.ok(await get(this, `${this.rest}/api/v2/spot/public/symbols`)).filter((p) => p.status === 'online').map((p) => [p.baseCoin, p.quoteCoin]);
+    },
+    // [ts(ms), open, high, low, close, volume, …], oldest first: up to 1000 recent candles, then 200 per request from the archive
+    history(b, q, tf, opts) {
+      return pages(opts, (end) => (end ? 200 : 1000), async (n, end) => {
+        const url = end
+          // (the archive leaves out the candle that endTime falls in, so point just past it)
+          ? `${this.rest}/api/v2/spot/market/history-candles?symbol=${b}${q}&granularity=${this.tfs[tf]}&limit=${n}&endTime=${bucketOf(end, tf) + TF[tf]}`
+          : `${this.rest}/api/v2/spot/market/candles?symbol=${b}${q}&granularity=${this.tfs[tf]}&limit=${n}`;
+        return this.ok(await get(this, url)).map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+      });
+    },
+    stream(b, q, tf, onBar, onStatus) {
+      const arg = { instType: 'SPOT', channel: 'candle' + this.ws[tf], instId: b + q };
+      return socket('wss://ws.bitget.com/v2/ws/public', {
+        onOpen: (send) => send({ op: 'subscribe', args: [arg] }),
+        onMessage: (m) => {
+          if (!m.arg || m.arg.channel !== arg.channel || m.arg.instId !== arg.instId || !Array.isArray(m.data)) return;
+          // the first message holds many past candles; the chart already has them
+          const rows = m.action === 'snapshot' ? m.data.slice().sort((x, y) => x[0] - y[0]).slice(-2) : m.data;
+          for (const r of rows) onBar({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] });
+        },
+        onStatus, ping: { every: 25000, msg: 'ping' },
+      });
+    },
+    async ticker(b, q) {
+      const t = this.ok(await get(this, `${this.rest}/api/v2/spot/market/tickers?symbol=${b}${q}`))[0];
+      return { c: +t.lastPr, o: +t.open, vq: +t.quoteVolume };
+    },
+  };
+
+  // ---------------------------------------------------------------- MEXC
+  // Its live feed needs a binary decoder, so Candela refreshes the latest candles every 3 seconds instead.
+  const MEXC = {
+    id: 'MEXC', name: 'MEXC', tag: 'MX', cors: false, rest: 'https://api.mexc.com',
+    tfs: { '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '60m', '4h': '4h', '1d': '1d', '1w': '1W' },
+    async pairs() {
+      const j = await get(this, `${this.rest}/api/v3/exchangeInfo`);
+      return (j.symbols || []).filter((p) => p.status === '1' && p.isSpotTradingAllowed !== false).map((p) => [p.baseAsset, p.quoteAsset]);
+    },
+    // like Binance: [open time, open, high, low, close, volume, …], oldest first, 500 per request.
+    // Older candles need both startTime and endTime.
+    history(b, q, tf, opts) {
+      return pages(opts, 500, async (n, end) => {
+        let url = `${this.rest}/api/v3/klines?symbol=${b}${q}&interval=${this.tfs[tf]}&limit=${n}`;
+        if (end) url += `&startTime=${Math.floor(end - n * TF[tf]) + 1}&endTime=${Math.floor(end)}`;
+        const rows = await get(this, url);
+        if (!Array.isArray(rows)) throw err(`MEXC: ${rows.msg || 'unexpected reply'}`, { fatal: true });
+        return rows.map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+      });
+    },
+    stream(b, q, tf, onBar, onStatus) { return poller(this, b, q, tf, onBar, onStatus, 3000); },
+    async ticker(b, q) {
+      const t = await get(this, `${this.rest}/api/v3/ticker/24hr?symbol=${b}${q}`);
+      return { c: +t.lastPrice, o: +t.openPrice, vq: +t.quoteVolume };
+    },
+  };
+
+  const EXCHANGES = { BYBIT, OKX, BITGET, KUCOIN, GATE, MEXC, KRAKEN, COINBASE };
+  const ID_RE = /^(BYBIT|OKX|BITGET|KUCOIN|GATE|MEXC|KRAKEN|COINBASE):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
   function parse(sym) {
     const m = ID_RE.exec(sym || '');
     return m ? { ex: EXCHANGES[m[1]], b: m[2], q: m[3] } : null;

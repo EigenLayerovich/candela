@@ -394,6 +394,7 @@ const publicSettings = () => ({
 const PROXY_ALLOW = [
   ['api.kucoin.com', /^\/api\/v[12]\/(market\/(candles|stats|allTickers|orderbook\/level1)|symbols)$/],
   ['api.bybit.com', /^\/v5\/market\/(kline|tickers|instruments-info)$/],
+  ['api.mexc.com', /^\/api\/v3\/(klines|ticker\/24hr|exchangeInfo)$/],
 ];
 const isLoopback = (h) => ['127.0.0.1', 'localhost', '::1', '0:0:0:0:0:0:0:1'].includes(h) || h.startsWith('127.');
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };

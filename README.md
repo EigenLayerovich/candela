@@ -130,21 +130,22 @@ closes (or every 15 seconds for "as soon as it appears"). The server uses the ap
 script code, so alerts behave exactly as they do in the browser. Crypto data comes from the exchanges'
 public APIs; no key needed.
 
-## Crypto exchanges: Binance, Bybit, KuCoin, Kraken, Coinbase
+## Crypto exchanges: Binance, Bybit, OKX, KuCoin, Gate.io, Kraken, Coinbase
 
-Binance is the default. Charts, watchlist, comparisons and alerts also work with **Bybit, KuCoin,
-Kraken and Coinbase** spot markets: public data, no account or key.
+Binance is the default. Charts, watchlist, comparisons and alerts also work with **Bybit, OKX, KuCoin,
+Gate.io, Kraken and Coinbase** spot markets: public data, no account or key.
 
 - **Symbol search**: the chips under the search box pick where to look: *All*, one exchange, or
   *Stocks & forex*. *All* shows the best matches on every exchange once you type. Exchange symbols show
-  as `BTC/USD` with a small tag (`KR` Kraken, `CB` Coinbase, `KC` KuCoin, `BY` Bybit); the chart title
+  as `BTC/USD` with a small tag (`BY` Bybit, `OK` OKX, `KC` KuCoin, `GT` Gate.io, `KR` Kraken,
+  `CB` Coinbase); the chart title
   names the exchange.
 - **Across exchanges** (side panel, under the watchlist): the chart's coin on every exchange, with the
   last price, 24h change and the difference from the chart you're looking at, refreshed every 15
   seconds. Click a row to open that market. Handy for spotting premiums and gaps between exchanges.
-- **Every timeframe works everywhere.** Where an exchange lacks one (Coinbase has no 4H, Kraken no 2H
-  or weekly), Candela builds it from smaller candles. Weeks start on Monday on every exchange.
-- **Live updates**: WebSocket on Bybit and Kraken; Coinbase builds the current candle from live trades;
+- **Every timeframe works everywhere.** Where an exchange lacks one (Coinbase has no 4H, Kraken no 2H,
+  Gate.io no 2H or weekly), Candela builds it from smaller candles. Weeks start on Monday on every exchange.
+- **Live updates**: WebSocket on Bybit, OKX, Gate.io and Kraken; Coinbase builds the current candle from live trades;
   KuCoin refreshes every 4 seconds.
 - **Alerts** (price and script markers) work on every exchange, in the browser and on the alert server.
 
@@ -214,7 +215,7 @@ is meant for personal use.
 ## Features
 
 - **Live data**: every Binance spot pair (BTC, ETH, SOL, ~3,000 pairs), real-time via WebSocket,
-  with a bar-close countdown; plus Bybit, KuCoin, Kraken and Coinbase (see above). **Stocks and ETFs** as Binance bStocks (free, live, no key) or via
+  with a bar-close countdown; plus Bybit, OKX, KuCoin, Gate.io, Kraken and Coinbase (see above). **Stocks and ETFs** as Binance bStocks (free, live, no key) or via
   Twelve Data with forex too (free key); see above.
   Scroll or zoom left and older history loads automatically.
 - **Timeframes**: 1m 3m 5m 15m 30m 1H 2H 4H 6H 12H 1D 3D 1W
@@ -337,7 +338,7 @@ It shows up in the Indicators dialog automatically, with a settings panel genera
 - `js/script.js`: Candela Script: lexer, parser, checker, interpreter, built-in functions
 - `js/alerts-core.js`: alert rules shared by the browser and the server
 - `js/data.js`: Binance REST/WebSocket, Twelve Data, demo feed, CSV parser
-- `js/exchanges.js`: Bybit, KuCoin, Kraken and Coinbase, and building missing timeframes
+- `js/exchanges.js`: Bybit, OKX, KuCoin, Gate.io, Kraken and Coinbase, and building missing timeframes
 - `server.js`: the alert server (also serves the app)
 - `desktop/`: the Windows app (Electron): `main.js` (window, tray, notifications), `preload.js`,
   `installer.nsi` (installer), icons

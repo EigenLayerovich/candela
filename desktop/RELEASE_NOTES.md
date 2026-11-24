@@ -1,4 +1,8 @@
-## New in 1.1.0
+## New in 1.2.0
+
+- **OKX and Gate.io** join Binance, Bybit, KuCoin, Kraken and Coinbase: charts with every timeframe, live updates, watchlist, comparisons, alerts, and the *Across exchanges* panel.
+
+## In 1.1.0
 
 - **More crypto exchanges**: Bybit, KuCoin, Kraken and Coinbase, next to Binance. Pick an exchange with the chips in the symbol search. Charts, every timeframe, watchlist, comparisons and alerts all work on them.
 - **Across exchanges** panel: the chart's coin on every exchange, with price, 24h change and the gap to your chart.

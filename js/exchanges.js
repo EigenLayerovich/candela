@@ -1,4 +1,4 @@
-/* Candela — more crypto exchanges: Bybit, KuCoin, Kraken and Coinbase (Binance lives in data.js).
+/* Candela — more crypto exchanges: Bybit, OKX, KuCoin, Gate.io, Kraken and Coinbase (Binance lives in data.js).
  *
  * Symbols are written EXCHANGE:BASE/QUOTE, e.g. "KRAKEN:BTC/USD", "KUCOIN:ETH/USDT". Every exchange gets
  * the same five operations: symbol list, candle history, live updates, a 24-hour ticker, and the candle
@@ -54,7 +54,7 @@
         tries = 0;
         onStatus && onStatus('live');
         onOpen((m) => { try { ws.send(JSON.stringify(m)); } catch (e) { /* closing */ } });
-        if (ping) pinger = setInterval(() => { try { ws.send(JSON.stringify(ping.msg)); } catch (e) { /* closing */ } }, ping.every);
+        if (ping) pinger = setInterval(() => { try { ws.send(typeof ping.msg === 'string' ? ping.msg : JSON.stringify(ping.msg)); } catch (e) { /* closing */ } }, ping.every);
       };
       ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } onMessage(m); };
       ws.onclose = () => { clearInterval(pinger); if (!closed) { onStatus && onStatus('reconnecting'); retry(); } };
@@ -94,7 +94,7 @@
   async function pages({ limit = 1000, endTime } = {}, per, fetchPage) {
     const out = new Map();
     let end = endTime;
-    for (let k = 0; out.size < limit && k < 4; k++) {
+    for (let k = 0, max = Math.min(12, Math.ceil(limit / per) + 1); out.size < limit && k < max; k++) {
       const n = Math.min(per, limit - out.size), rows = await fetchPage(n, end);
       let oldest = Infinity;
       for (const r of rows) { if (!endTime || r.t <= endTime) out.set(r.t, r); oldest = Math.min(oldest, r.t); }
@@ -249,8 +249,83 @@
     },
   };
 
-  const EXCHANGES = { BYBIT, KUCOIN, KRAKEN, COINBASE };
-  const ID_RE = /^(BYBIT|KUCOIN|KRAKEN|COINBASE):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
+  // ---------------------------------------------------------------- OKX
+  const OKX = {
+    id: 'OKX', name: 'OKX', tag: 'OK', cors: true, rest: 'https://www.okx.com',
+    // the "utc" bars start at midnight UTC (OKX's plain 1D starts at midnight Hong Kong time)
+    tfs: { '1m': '1m', '3m': '3m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1H', '2h': '2H', '4h': '4H', '6h': '6Hutc', '12h': '12Hutc', '1d': '1Dutc', '1w': '1Wutc' },
+    ok(j) { if (j.code !== '0') throw err(`OKX: ${j.msg || j.code}`, { fatal: j.code === '51001' || /exist|invalid/i.test(j.msg || '') }); return j.data; },
+    async pairs() {
+      return this.ok(await get(this, `${this.rest}/api/v5/public/instruments?instType=SPOT`)).filter((p) => p.state === 'live').map((p) => [p.baseCcy, p.quoteCcy]);
+    },
+    // [ts(ms), open, high, low, close, volume, …], newest first; the latest candles, then the archive (300 per request)
+    history(b, q, tf, opts) {
+      return pages(opts, 300, async (n, end) => {
+        const url = end
+          ? `${this.rest}/api/v5/market/history-candles?instId=${b}-${q}&bar=${this.tfs[tf]}&limit=${n}&after=${Math.floor(end) + 1}`
+          : `${this.rest}/api/v5/market/candles?instId=${b}-${q}&bar=${this.tfs[tf]}&limit=${n}`;
+        return this.ok(await get(this, url)).map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+      });
+    },
+    stream(b, q, tf, onBar, onStatus) {
+      const arg = { channel: 'candle' + this.tfs[tf], instId: `${b}-${q}` };
+      return socket('wss://ws.okx.com/ws/v5/business', {
+        onOpen: (send) => send({ op: 'subscribe', args: [arg] }),
+        onMessage: (m) => {
+          if (!m.arg || m.arg.channel !== arg.channel || m.arg.instId !== arg.instId || !m.data) return;
+          for (const r of m.data) onBar({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] });
+        },
+        onStatus, ping: { every: 25000, msg: 'ping' },
+      });
+    },
+    async ticker(b, q) {
+      const t = this.ok(await get(this, `${this.rest}/api/v5/market/ticker?instId=${b}-${q}`))[0];
+      return { c: +t.last, o: +t.open24h, vq: +t.volCcy24h };
+    },
+  };
+
+  // ---------------------------------------------------------------- Gate.io
+  const GATE = {
+    id: 'GATE', name: 'Gate.io', tag: 'GT', cors: true, rest: 'https://api.gateio.ws',
+    tfs: { '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '4h', '1d': '1d' },
+    async check(r) {
+      if (r && !Array.isArray(r) && r.label) throw err(`Gate.io: ${r.message || r.label}`, { fatal: /INVALID|NOT_FOUND/.test(r.label) });
+      return r;
+    },
+    async pairs() {
+      const list = await this.check(await get(this, `${this.rest}/api/v4/spot/currency_pairs`));
+      return list.filter((p) => p.trade_status === 'tradable').map((p) => [p.base, p.quote]);
+    },
+    // [time(s), quote volume, close, high, low, open, volume, closed], oldest first
+    history(b, q, tf, opts) {
+      return pages(opts, 1000, async (n, end) => {
+        let url = `${this.rest}/api/v4/spot/candlesticks?currency_pair=${b}_${q}&interval=${this.tfs[tf]}&limit=${n}`;
+        if (end) url += `&to=${Math.floor(end / 1000)}`;
+        const rows = await this.check(await get(this, url));
+        return rows.map((r) => ({ t: r[0] * 1000, o: +r[5], h: +r[3], l: +r[4], c: +r[2], v: +r[6] }));
+      });
+    },
+    stream(b, q, tf, onBar, onStatus) {
+      const name = `${this.tfs[tf]}_${b}_${q}`;
+      const now = () => Math.floor(Date.now() / 1000);
+      return socket('wss://api.gateio.ws/ws/v4/', {
+        onOpen: (send) => send({ time: now(), channel: 'spot.candlesticks', event: 'subscribe', payload: [this.tfs[tf], `${b}_${q}`] }),
+        onMessage: (m) => {
+          const d = m.result;
+          if (m.channel !== 'spot.candlesticks' || m.event !== 'update' || !d || d.n !== name) return;
+          onBar({ t: d.t * 1000, o: +d.o, h: +d.h, l: +d.l, c: +d.c, v: +d.a });
+        },
+        onStatus, ping: { every: 20000, msg: { channel: 'spot.ping' } },
+      });
+    },
+    async ticker(b, q) {
+      const t = (await this.check(await get(this, `${this.rest}/api/v4/spot/tickers?currency_pair=${b}_${q}`)))[0];
+      return { c: +t.last, o: +t.last / (1 + +t.change_percentage / 100), vq: +t.quote_volume };
+    },
+  };
+
+  const EXCHANGES = { BYBIT, OKX, KUCOIN, GATE, KRAKEN, COINBASE };
+  const ID_RE = /^(BYBIT|OKX|KUCOIN|GATE|KRAKEN|COINBASE):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
   function parse(sym) {
     const m = ID_RE.exec(sym || '');
     return m ? { ex: EXCHANGES[m[1]], b: m[2], q: m[3] } : null;
@@ -376,7 +451,7 @@
       const p = list && prefs.map((q) => list.find((x) => x.base === base && x.quote === q)).find(Boolean);
       out.push({ ex: exId, name: EXCHANGES[exId].name, id: p ? p.id : null, quote: p ? p.quote : null, problem });
     }));
-    const order = ['BINANCE', 'BYBIT', 'KUCOIN', 'KRAKEN', 'COINBASE'];
+    const order = ['BINANCE', ...Object.keys(EXCHANGES)];
     return out.sort((a, b) => order.indexOf(a.ex) - order.indexOf(b.ex));
   }
   function ticker(sym) {

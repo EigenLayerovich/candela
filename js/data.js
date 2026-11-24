@@ -430,19 +430,36 @@
   const bStockList = () => (bstocks ? Object.keys(bstocks).filter((p) => bstocks[p].trading) : []);
 
   // ---------- one entry point for every kind of symbol ----------
-  const history = (sym, tf, opts = {}) => (isStock(sym) ? stockBars(sym, tf, opts) : klines(sym, tf, opts));
-  const stream = (sym, tf, onBar, onStatus) => (isStock(sym) ? stockStream(sym, tf, onBar, onStatus) : klineStream(sym, tf, onBar, onStatus));
-  const supportsTf = (sym, tf) => !isStock(sym) || !!TD_TF[tf];
+  // other data sources (more exchanges, see exchanges.js) register here: { history, stream, supportsTf }
+  const sources = [];
+  const registerSource = (test, src) => sources.push({ test, ...src });
+  const sourceOf = (sym) => sources.find((s) => s.test(sym)) || null;
+  function history(sym, tf, opts = {}) {
+    const src = sourceOf(sym);
+    if (src) return src.history(sym, tf, opts);
+    return isStock(sym) ? stockBars(sym, tf, opts) : klines(sym, tf, opts);
+  }
+  function stream(sym, tf, onBar, onStatus) {
+    const src = sourceOf(sym);
+    if (src) return src.stream(sym, tf, onBar, onStatus);
+    return isStock(sym) ? stockStream(sym, tf, onBar, onStatus) : klineStream(sym, tf, onBar, onStatus);
+  }
+  function supportsTf(sym, tf) {
+    const src = sourceOf(sym);
+    if (src) return src.supportsTf(sym, tf);
+    return !isStock(sym) || !!TD_TF[tf];
+  }
   // the supported timeframe closest to tf (for comparing a stock on a crypto chart, say)
   function nearestTf(sym, tf) {
     if (supportsTf(sym, tf)) return tf;
+    if (sourceOf(sym)) return Object.keys(TF).filter((k) => supportsTf(sym, k)).reduce((best, k) => (Math.abs(Math.log(TF[k] / TF[tf])) < Math.abs(Math.log(TF[best] / TF[tf])) ? k : best), '1h');
     const want = TF[tf];
     return Object.keys(TD_TF).reduce((best, k) => (Math.abs(Math.log(TF[k] / want)) < Math.abs(Math.log(TF[best] / want)) ? k : best), '1h');
   }
 
   window.MarketData = {
     TF, klines, allSymbols, tickers24, klineStream, tickerStream, demoBars, demoStream, parseCSV,
-    history, stream, supportsTf, nearestTf,
+    history, stream, supportsTf, nearestTf, registerSource,
     isStock, isForex, parseStock, stockLabel, stockMeta: (sym) => td.meta[sym] || null, stockConfig, stockUsage,
     stockQuotes, searchStocks, checkStockKey, marketOpen, pollPeriod, onStockUsage: (fn) => { td.onUsage = fn; }, STOCK_TF: TD_TF,
     loadBStocks, isBStock, bStockTicker, bStockFor, bStockList,

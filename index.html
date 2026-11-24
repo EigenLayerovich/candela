@@ -16,6 +16,7 @@
     <button id="symbolBtn" class="symbol-btn" title="Symbol search (just start typing)">
       <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
       <span id="symbolName">BTCUSDT</span>
+      <span id="symbolEx" class="sym-ex"></span>
     </button>
     <div class="sep"></div>
     <div id="tfGroup" class="tf-group"></div>
@@ -69,6 +70,10 @@
         <div class="wl-cols"><span>Symbol</span><span>Last</span><span>24h</span></div>
         <div id="watchlist" class="scroll"></div>
       </div>
+      <div class="side-sec" id="acrossSec">
+        <div class="side-head"><button id="acrossToggle" class="side-fold" aria-expanded="true"><span id="acrossTitle">Across exchanges</span></button><span id="acrossNote" class="muted small"></span></div>
+        <div id="across" class="scroll across"></div>
+      </div>
       <div class="side-sec">
         <div class="side-head"><span>Alerts</span><button id="serverBtn" class="srv-pill" title="Alert server">This tab only</button></div>
         <div id="alertList" class="scroll alerts"></div>
@@ -84,6 +89,7 @@
 
   <script src="js/indicators.js"></script>
   <script src="js/data.js"></script>
+  <script src="js/exchanges.js"></script>
   <script src="js/chart.js"></script>
   <script src="js/script.js"></script>
   <script src="js/alerts-core.js"></script>

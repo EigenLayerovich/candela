@@ -20,8 +20,11 @@
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   // display name: AAPL, EUR/USD, BTCUSDT, NVDAB (a Binance bStock)
-  const bare = (sym) => (MD.isBStock(sym) ? sym.replace(/USDT$/, '') : sym.replace(/^(CSV|TD):/, '').replace(/@.*$/, ''));
+  const bare = (sym) => MD.exDisplay(sym) || (MD.isBStock(sym) ? sym.replace(/USDT$/, '') : sym.replace(/^(CSV|TD):/, '').replace(/@.*$/, ''));
   const isStock = (sym) => sym.startsWith('TD:');
+  const exOf = (sym) => MD.exchangeOf(sym); // Bybit, KuCoin, Kraken or Coinbase (null for Binance and the rest)
+  // bare name plus the exchange, for lists that mix exchanges: "BTC/USD · Kraken"
+  const symLabel = (sym) => (exOf(sym) ? `${bare(sym)} · ${exOf(sym).name}` : bare(sym));
   const isDemo = (sym) => /^DEMO\d*$/.test(sym);
   const uid = () => Math.random().toString(36).slice(2, 10);
   const CMP_COLORS = ['#F5A623', '#E040FB', '#2EC4B6', '#FF7043', '#9C6ADE'];
@@ -79,6 +82,7 @@
     scripts: [], scriptDrafts: {}, // custom indicator scripts and unsaved edits
     stocks: { key: '', perMin: 8, perDay: 800 }, // Twelve Data (stocks, ETFs, forex)
     serverDeletes: [], serverScriptDeletes: [], // changes to send to the alert server when it is back
+    exNotes: {}, searchSrc: 'ALL', showAcross: true,
     watchlist: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'LINKUSDT', 'AVAXUSDT', 'LTCUSDT'],
   };
   function loadState() {
@@ -97,6 +101,18 @@
   // Set by the single-file preview build, where the sandbox blocks exchange connections.
   const PREVIEW = !!window.CANDELA_PREVIEW;
   const state = loadState();
+  if (!state.exNotes || typeof state.exNotes !== 'object') state.exNotes = {};
+  // Opened from Candela's server (the Windows app or `node server.js`): exchanges that don't allow web
+  // pages to load their data (KuCoin) go through the server.
+  (() => {
+    if (PREVIEW || location.protocol === 'file:') return;
+    const nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+    if (nav && Array.isArray(nav.serverTiming) && nav.serverTiming.some((e) => e.name === 'candela')) {
+      let token = '';
+      try { token = localStorage.getItem('candela.serverToken') || ''; } catch (e) { /* ignore */ }
+      MD.setProxy('/api/proxy', token);
+    }
+  })();
   for (const [i, c] of state.charts.entries()) {
     if (PREVIEW) c.symbol = i ? 'DEMO' + (i + 1) : 'DEMO';
     else if (c.symbol.startsWith('CSV:')) c.symbol = 'BTCUSDT'; // CSV data isn't persisted
@@ -223,7 +239,8 @@
       const tfLabel = sym.startsWith('CSV:') ? '' : ' · ' + tfName(this.tf);
       const meta = isStock(sym) && MD.stockMeta(sym);
       const src = isDemo(sym) ? ' · SIMULATED' : this.mode === 'demo' ? ' · DEMO DATA' : sym.startsWith('CSV:') ? ' · CSV'
-        : isStock(sym) ? ' · ' + (MD.isForex(sym) ? 'FOREX' : (meta && meta.exchange) || 'STOCKS') : MD.isBStock(sym) ? ' · BINANCE bSTOCK' : ' · BINANCE';
+        : isStock(sym) ? ' · ' + (MD.isForex(sym) ? 'FOREX' : (meta && meta.exchange) || 'STOCKS') : MD.isBStock(sym) ? ' · BINANCE bSTOCK'
+        : exOf(sym) ? ' · ' + exOf(sym).name.toUpperCase() : ' · BINANCE';
       return bare(sym) + tfLabel + src;
     }
 
@@ -259,6 +276,23 @@
         bars = ds.bars; interval = ds.interval; this.mode = 'csv'; this.noMore = true;
       } else if (isDemo(sym)) {
         bars = MD.demoBars(tf, 1500, sym); this.mode = 'demo'; this.noMore = true;
+      } else if (exOf(sym)) {
+        const ex = exOf(sym);
+        try {
+          bars = await MD.history(sym, tf, { limit: 1000 });
+          if (!bars.length) throw Object.assign(new Error(`No ${tfName(tf)} data for ${bare(sym)} on ${ex.name}`), { fatal: true });
+          this.mode = 'live';
+          // Kraken has no older candles to scroll back to
+          if (ex.historyNote && !state.exNotes[ex.id]) { state.exNotes[ex.id] = 1; save(); toast(ex.historyNote, 'info', 6000); }
+        } catch (e) {
+          if (gen !== this.gen) return;
+          c.title = this.title();
+          c.message = e.fatal ? e.message : `${bare(sym)}: could not reach ${ex.name}. Check your connection.`;
+          this.setStatus('error');
+          c.setData([], MD.TF[tf]);
+          c.invalidate();
+          return;
+        }
       } else if (isStock(sym)) {
         try {
           bars = await MD.history(sym, tf, { limit: 1000 });
@@ -349,7 +383,7 @@
 
     // ---- comparison overlays
     async addCompare(sym) {
-      if (!sym.startsWith('CSV:') && !isDemo(sym) && !isStock(sym)) {
+      if (!sym.startsWith('CSV:') && !isDemo(sym) && !isStock(sym) && !exOf(sym)) {
         let known = null;
         try { known = await MD.allSymbols(); } catch (e) { /* offline: let the data request decide */ }
         if (known && !known.includes(sym)) { toast(`Can't compare ${sym}: not found on Binance`, 'error', 6000); return; }
@@ -403,7 +437,7 @@
       const st = { c: cc, tf, bars: [], interval: MD.TF[tf] || 3600e3, stop: null, noMore: false };
       this.cmps.set(cc.id, st);
       if (prev) this.chart.updateCompare(cc.id, { values: [] });
-      else this.chart.addCompare({ id: cc.id, symbol: bare(cc.symbol), color: cc.color, visible: cc.visible !== false, values: [] });
+      else this.chart.addCompare({ id: cc.id, symbol: symLabel(cc.symbol), color: cc.color, visible: cc.visible !== false, values: [] });
       const alive = () => this.cmps.get(cc.id) === st;
       const sym = cc.symbol;
       try {
@@ -424,7 +458,7 @@
         }
       } catch (e) {
         if (!alive()) return;
-        const why = sym.startsWith('CSV:') ? e.message : e.needsKey ? 'stocks and forex need a free Twelve Data API key' : e.budget ? e.message
+        const why = sym.startsWith('CSV:') || exOf(sym) ? (e.fatal ? e.message : `could not reach ${exOf(sym) ? exOf(sym).name : 'it'}`) : e.needsKey ? 'stocks and forex need a free Twelve Data API key' : e.budget ? e.message
           : isStock(sym) ? (e.fatal ? e.message : 'could not reach Twelve Data') : e.fatal ? 'not found on Binance' : 'could not reach Binance';
         toast(`Can't compare ${bare(sym)}: ${why}`, 'error', 6000);
         this.removeCompare(cc.id);
@@ -814,6 +848,7 @@
     if (!active) return;
     const sym = active.symbol, tf = active.tf, csv = sym.startsWith('CSV:');
     $('#symbolName').textContent = bare(sym);
+    $('#symbolEx').textContent = exOf(sym) ? exOf(sym).name.toUpperCase() : '';
     for (const b of document.querySelectorAll('#tfGroup .tf')) {
       b.classList.toggle('active', !csv && b.dataset.tf === tf);
       b.classList.toggle('na', !MD.supportsTf(sym, b.dataset.tf));
@@ -832,6 +867,7 @@
     $('#side').classList.toggle('closed', !state.sideOpen);
     $('#sideBtn').classList.toggle('active', state.sideOpen);
     for (const r of document.querySelectorAll('.wl-row')) r.classList.toggle('active', r.dataset.sym === sym);
+    updateAcross();
   }
 
   // ---- layout menu
@@ -1008,12 +1044,34 @@
   async function openSymbolSearch(prefill = '', opts = {}) {
     const input = h('input', { class: 'search', placeholder: 'Search crypto, stocks, ETFs and forex: BTC, AAPL, SPY, EUR/USD…', value: prefill, spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Search symbols' });
     const list = h('div', { class: 'list' });
+    // where to search: everything, one crypto exchange, or stocks
+    const SOURCES = [['ALL', 'All'], ['BINANCE', 'Binance'], ...Object.values(MD.EXCHANGES).map((ex) => [ex.id, ex.name]), ['STOCKS', 'Stocks & forex']];
+    let src = SOURCES.some(([k]) => k === state.searchSrc) && !PREVIEW ? state.searchSrc : 'ALL';
+    const chips = h('div', { class: 'src-chips', role: 'tablist' }, SOURCES.map(([k, label]) => h('button', {
+      class: 'chip' + (k === src ? ' on' : ''), 'data-src': k, role: 'tab', disabled: PREVIEW && k !== 'ALL' ? '' : null,
+      onclick: () => {
+        src = k; state.searchSrc = k; save(); sel = 0;
+        chips.querySelectorAll('.chip').forEach((b) => b.classList.toggle('on', b.dataset.src === k));
+        loadEx(); render(); input.focus();
+      },
+    }, label)));
+    // symbol lists of the other exchanges, loaded when needed
+    const exLists = {}, exProblems = {};
+    const loadEx = () => {
+      if (PREVIEW) return;
+      for (const id of Object.keys(MD.EXCHANGES)) {
+        if (src !== 'ALL' && src !== id) continue;
+        if (exLists[id] || exProblems[id] === 'loading') continue;
+        exProblems[id] = 'loading';
+        MD.exPairs(id).then((l) => { exLists[id] = l; delete exProblems[id]; render(); }, (e) => { exProblems[id] = e.message; render(); });
+      }
+    };
     const csvBtn = h('button', { class: 'btn', onclick: () => { csvTarget = opts.csv || 'main'; $('#csvInput').click(); } }, 'Import CSV…');
     const keyBtn = h('button', { class: 'btn', onclick: () => openStockSettings() }, state.stocks.key ? 'Stock data…' : 'Add stock data key…');
     const hint = h('span', { class: 'muted' }, PREVIEW ? 'Preview: simulated data only. Download the app for live crypto, stocks and forex.' : state.stocks.key ? 'Crypto from Binance. Stocks, ETFs and forex from Twelve Data.' : 'Stocks, ETFs and forex need a free Twelve Data API key.');
     if (PREVIEW) keyBtn.hidden = true;
     const title = opts.title || (slots.length > 1 && !state.sync.symbol ? `Symbol search · chart ${slots.indexOf(active) + 1}` : 'Symbol search');
-    const { close } = openModal(title, h('div', {}, input, list), { footer: [hint, keyBtn, csvBtn] });
+    const { close } = openModal(title, h('div', {}, input, chips, list), { footer: [hint, keyBtn, csvBtn] });
     let symbols = [], stockHits = [], stockQ = null, stockTimer = null, sel = 0, items = [];
     const exclude = (id) => opts.exclude && opts.exclude.includes(id);
     const render = () => {
@@ -1055,17 +1113,34 @@
       const bGroup = ['Stocks · Binance bStocks (free, live)', bRows], tdGroup = ['Stocks, ETFs & forex · Twelve Data', stockRows];
       // with a Twelve Data key the real exchange data comes first; without one, the free bStocks do
       const stockGroups = state.stocks.key ? [tdGroup, bGroup] : [bGroup, tdGroup];
-      const groups = stocksFirst ? [...stockGroups, ['Crypto · Binance', cryptoRows]] : [['Crypto · Binance', cryptoRows], ...stockGroups];
+      // Bybit, KuCoin, Kraken, Coinbase
+      const exGroups = [];
+      for (const ex of Object.values(MD.EXCHANGES)) {
+        if (src !== 'ALL' && src !== ex.id) continue;
+        if (src === 'ALL' && !q) continue; // "All" lists other exchanges once you type
+        const l = exLists[ex.id];
+        const rows = l ? MD.searchPairs(l, raw).filter((p) => !exclude(p.id)).slice(0, src === 'ALL' ? 4 : 60).map((p) => ({ id: p.id, kind: 'ex', ex })) : [];
+        if (rows.length) exGroups.push([`Crypto · ${ex.name}`, rows]);
+        else if (src === ex.id) exGroups.push([`Crypto · ${ex.name}`, [], exProblems[ex.id] === 'loading' || !l ? (exProblems[ex.id] && exProblems[ex.id] !== 'loading' ? exProblems[ex.id] : `Loading ${ex.name} symbols…`) : `Nothing found on ${ex.name} for "${raw}".`]);
+      }
+      const binGroup = ['Crypto · Binance', cryptoRows];
+      let groups;
+      if (src === 'BINANCE') groups = [binGroup, bGroup];
+      else if (src === 'STOCKS') groups = stockGroups;
+      else if (src !== 'ALL') groups = exGroups;
+      else groups = stocksFirst ? [...stockGroups, binGroup, ...exGroups] : [binGroup, ...exGroups, ...stockGroups];
       items = [];
       list.innerHTML = '';
-      for (const [label, rows] of groups) {
-        if (!rows.length) continue;
+      for (const [label, rows, note] of groups) {
+        if (!rows.length && !note) continue;
         list.appendChild(h('div', { class: 'list-group' }, label));
+        if (note) list.appendChild(h('div', { class: 'muted list-empty' }, note));
         for (const row of rows) {
           const i = items.length;
           items.push(row);
           let detail;
-          if (row.kind === 'crypto') detail = isDemo(row.id) ? 'Demo feed' : row.id.startsWith('CSV:') ? 'Imported CSV' : 'Crypto';
+          if (row.kind === 'crypto') detail = isDemo(row.id) ? 'Demo feed' : row.id.startsWith('CSV:') ? 'Imported CSV' : 'Crypto · Binance';
+          else if (row.kind === 'ex') detail = `Crypto · ${row.ex.name}`;
           else if (row.kind === 'bstock') {
             const t = MD.bStockTicker(row.id), named = stockHits.find((r) => r.us && r.symbol.replace(/[^A-Z0-9]/g, '') === t);
             detail = `${named ? named.name : 'Tokenized ' + t} · bStock · free, live`;
@@ -1075,11 +1150,11 @@
             if (!r.us) detail += ' · may need a paid plan';
           }
           list.appendChild(h('div', { class: 'list-row' + (i === sel ? ' sel' : ''), onclick: () => pick(row.id) },
-            h('b', {}, bare(row.id)), h('span', { class: 'muted' }, detail,
+            h('b', {}, bare(row.id), row.kind === 'ex' ? h('i', { class: 'ex-tag' }, row.ex.tag) : null), h('span', { class: 'muted' }, detail,
               row.kind === 'stock' && !state.stocks.key ? h('i', { class: 'needs-key' }, 'needs free key') : null)));
         }
       }
-      if (!items.length && raw) list.appendChild(h('div', { class: 'muted list-empty' }, stockQ === raw || !raw ? `Nothing found for "${raw}".` : 'Searching…'));
+      if (!items.length && raw && !groups.some((g) => g[2])) list.appendChild(h('div', { class: 'muted list-empty' }, stockQ === raw || !raw ? `Nothing found for "${raw}".` : 'Searching…'));
       sel = Math.min(sel, Math.max(0, items.length - 1));
     };
     const pick = (id) => {
@@ -1099,6 +1174,7 @@
       }, 250);
     };
     input.addEventListener('input', () => { sel = 0; render(); queueStockSearch(); });
+    loadEx();
     input.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown') { sel = Math.min(items.length - 1, sel + 1); render(); e.preventDefault(); list.querySelector('.sel')?.scrollIntoView({ block: 'nearest' }); }
       else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); render(); e.preventDefault(); list.querySelector('.sel')?.scrollIntoView({ block: 'nearest' }); }
@@ -1761,7 +1837,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     for (const sym of state.watchlist) {
       const q = quotes[sym];
       const row = h('div', { class: 'wl-row' + (active && sym === active.symbol ? ' active' : ''), 'data-sym': sym, onclick: () => openSymbol(sym) },
-        h('span', { class: 'wl-sym', title: isStock(sym) ? `${bare(sym)} (${MD.isForex(sym) ? 'forex' : 'stock'}, Twelve Data)` : MD.isBStock(sym) ? `${bare(sym)}: Binance bStock tracking ${MD.bStockTicker(sym)}` : sym }, bare(sym)),
+        h('span', { class: 'wl-sym', title: isStock(sym) ? `${bare(sym)} (${MD.isForex(sym) ? 'forex' : 'stock'}, Twelve Data)` : MD.isBStock(sym) ? `${bare(sym)}: Binance bStock tracking ${MD.bStockTicker(sym)}` : exOf(sym) ? `${bare(sym)} on ${exOf(sym).name}` : `${sym} on Binance` },
+          bare(sym), exOf(sym) ? h('i', { class: 'ex-tag' }, exOf(sym).tag) : null),
         h('span', { class: 'wl-last' }, q ? q.c.toFixed(decimalsFor(q.c)) : '—'),
         h('span', { class: 'wl-chg' }, q ? fmtChg(q) : ''),
         h('button', { class: 'wl-x', title: 'Remove', onclick: (e) => {
@@ -1796,8 +1873,9 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (tickStop) tickStop();
     tickStop = null;
     const syms = [...new Set([...state.watchlist, ...priceAlerts().filter((a) => a.active).map((a) => a.symbol)])]
-      .filter((s) => !isDemo(s) && !s.startsWith('CSV:') && !isStock(s));
+      .filter((s) => !isDemo(s) && !s.startsWith('CSV:') && !isStock(s) && !exOf(s));
     pollStockQuotes();
+    pollExQuotes();
     if (!syms.length) return;
     try { (await MD.tickers24(syms)).forEach((q) => updateQuote(q.s, q.c, q.o)); } catch (e) { /* offline */ }
     tickStop = MD.tickerStream(syms, (q) => {
@@ -1807,13 +1885,96 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     });
   }
 
+  // Bybit, KuCoin, Kraken, Coinbase prices for the watchlist and for price alerts running in this tab
+  let exQuoteTimer = null;
+  async function pollExQuotes() {
+    clearTimeout(exQuoteTimer);
+    exQuoteTimer = null;
+    if (PREVIEW) return;
+    const alertSyms = priceAlerts().filter((a) => a.active && exOf(a.symbol) && !servedByServer(a)).map((a) => a.symbol);
+    const syms = [...new Set([...state.watchlist.filter(exOf), ...alertSyms])];
+    if (!syms.length) return;
+    await Promise.all(syms.map(async (sym) => {
+      let q;
+      try { q = await MD.ticker(sym); } catch (e) { return; }
+      updateQuote(sym, q.c, q.o);
+      if (!slots.some((x) => x.symbol === sym && x.mode === 'live')) checkAlerts(sym, q.c);
+    }));
+    exQuoteTimer = setTimeout(pollExQuotes, alertSyms.length ? 5000 : 10000);
+  }
+
+  // ---- the chart's coin on every exchange (side panel): price, 24h change, and the gap to this chart
+  let acrossKey = null, acrossBase = '', acrossRows = [], acrossTimer = null, acrossGen = 0;
+  function updateAcross() {
+    const sec = $('#acrossSec');
+    const bq = active && !PREVIEW ? MD.baseQuote(active.symbol) : null;
+    sec.classList.toggle('hidden', !bq);
+    sec.classList.toggle('folded', !state.showAcross);
+    $('#acrossToggle').setAttribute('aria-expanded', String(!!state.showAcross));
+    if (!bq) { clearTimeout(acrossTimer); acrossGen++; acrossKey = null; return; }
+    $('#acrossTitle').textContent = `${bq.base} across exchanges`;
+    const key = bq.base + '/' + bq.quote;
+    if (key === acrossKey) { renderAcross(); return; }
+    acrossKey = key; acrossBase = bq.base; acrossRows = [];
+    renderAcross();
+    const gen = ++acrossGen;
+    clearTimeout(acrossTimer);
+    MD.samePairs(bq.base, bq.quote).then((rows) => {
+      if (gen !== acrossGen) return;
+      acrossRows = rows;
+      renderAcross();
+      refreshAcross(gen);
+    });
+  }
+  async function refreshAcross(gen) {
+    clearTimeout(acrossTimer);
+    if (gen !== acrossGen) return;
+    if (state.showAcross && state.sideOpen && !document.hidden) {
+      await Promise.all(acrossRows.filter((r) => r.id).map(async (r) => {
+        try { const t = await MD.ticker(r.id); r.c = t.c; r.o = t.o; r.err = null; } catch (e) { r.err = e.message; }
+      }));
+      if (gen !== acrossGen) return;
+      renderAcross();
+    }
+    acrossTimer = setTimeout(() => refreshAcross(gen), 15000);
+  }
+  function renderAcross() {
+    const box = $('#across');
+    box.innerHTML = '';
+    if (!acrossRows.length) { box.append(h('div', { class: 'muted list-empty' }, 'Loading prices…')); return; }
+    const sym = active.symbol, cur = acrossRows.find((r) => r.id === sym);
+    const ref = cur && cur.c != null ? cur.c : lastPx[sym];
+    $('#acrossNote').textContent = '';
+    box.append(h('div', { class: 'ax-cols' }, h('span', {}, 'Exchange'), h('span', {}, 'Last'), h('span', {}, '24h'), h('span', { title: 'Difference from the price on this chart' }, 'vs chart')));
+    for (const r of acrossRows) {
+      if (!r.id) {
+        const why = r.problem ? (r.problem.geo ? 'blocked in your region' : r.problem.needsServer ? 'needs the Windows app' : 'unavailable') : 'not listed';
+        box.append(h('div', { class: 'ax-row na', title: r.problem ? r.problem.message : `${acrossBase} isn't traded on ${r.name}` },
+          h('span', { class: 'ax-name' }, r.name), h('span', { class: 'ax-na' }, why)));
+        continue;
+      }
+      const has = r.c != null && isFinite(r.c);
+      const chg = has && r.o ? ((r.c - r.o) / r.o) * 100 : null;
+      const diff = has && ref && r.id !== sym ? ((r.c - ref) / ref) * 100 : null;
+      const pct = (v) => (v == null ? '' : (v >= 0 ? '+' : '') + v.toFixed(Math.abs(v) < 1 ? 2 : 1) + '%');
+      box.append(h('div', {
+        class: 'ax-row' + (r.id === sym ? ' current' : ''), title: r.err ? r.err : `${acrossBase}/${r.quote} on ${r.name}: click to open`,
+        onclick: () => openSymbol(r.id),
+      },
+      h('span', { class: 'ax-name' }, r.name),
+      h('span', { class: 'ax-px' }, has ? r.c.toFixed(decimalsFor(r.c)) : r.err ? '!' : '…'),
+      h('span', { class: 'ax-chg ' + (chg == null ? '' : chg >= 0 ? 'up' : 'down') }, pct(chg)),
+      h('span', { class: 'ax-diff' }, r.id === sym ? 'this' : pct(diff))));
+    }
+  }
+
   function addToWatchlist() {
     openSymbolSearch('', {
       title: 'Add to watchlist',
       exclude: state.watchlist,
       onPick: async (s) => {
         if (state.watchlist.includes(s) || isDemo(s) || s.startsWith('CSV:')) return;
-        if (!isStock(s)) {
+        if (!isStock(s) && !exOf(s)) {
           try {
             const all = await MD.allSymbols();
             if (!all.includes(s)) { toast(`"${s}" is not a Binance symbol`, 'error'); return; }
@@ -1857,8 +2018,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
 
   function alertTitle(a) {
     return isMarkerAlert(a)
-      ? `${bare(a.symbol)} ${tfName(a.tf)} · ${a.scriptName}: ${a.markName}`
-      : `${bare(a.symbol)} crossing ${a.price.toFixed(decimalsFor(a.price))}`;
+      ? `${symLabel(a.symbol)} ${tfName(a.tf)} · ${a.scriptName}: ${a.markName}`
+      : `${symLabel(a.symbol)} crossing ${a.price.toFixed(decimalsFor(a.price))}`;
   }
 
   function refreshAlerts() {
@@ -1885,7 +2046,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
         : srv.connected ? '\nRuns only while this tab is open (simulated and CSV data stay in the browser).' : '\nRuns while this page is open.';
       const row = h('div', { class: 'al-row' + (a.active && !a.paused ? '' : ' done') + (isMarkerAlert(a) ? ' marker' : ''), title: tip + where, onclick: () => showAlertOnChart(a) },
         h('span', { class: 'al-dot' }),
-        h('span', { class: 'al-text' }, h('b', {}, bare(a.symbol)),
+        h('span', { class: 'al-text' }, h('b', {}, symLabel(a.symbol)),
           isMarkerAlert(a) ? ` ${tfName(a.tf)} · ${a.scriptName}: ${a.markName}` : ` crossing ${a.price.toFixed(decimalsFor(a.price))}`,
           a.paused ? h('small', { class: 'al-why' }, a.paused) : null),
         h('span', { class: 'muted al-state' }, stateText),
@@ -1915,7 +2076,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (lastPx[symbol] != null) a.refPrice = lastPx[symbol]; // lets the server spot a crossing before its first price check
     state.alerts.push(a);
     registerAlert(a);
-    toast(`Alert set: ${bare(symbol)} crossing ${(+price).toFixed(decimalsFor(price))}`, 'info');
+    toast(`Alert set: ${symLabel(symbol)} crossing ${(+price).toFixed(decimalsFor(price))}`, 'info');
     askNotificationPermission();
   }
 
@@ -2053,6 +2214,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (!j || j.app !== 'candela-alert-server') return renderServerStatus(); // served by a plain web server
     srv.available = true;
     srv.needsToken = false;
+    MD.setProxy('/api/proxy', srv.token);
     openServerEvents();
   }
 
@@ -2502,6 +2664,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     toast('Preview: simulated price feed. Download the app for live Binance data. Every tool and indicator works here.', 'info', 9000);
   }
   $('#wlAdd').addEventListener('click', addToWatchlist);
+  $('#acrossToggle').addEventListener('click', () => { state.showAcross = !state.showAcross; save(); updateAcross(); refreshAcross(acrossGen); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && acrossKey) refreshAcross(acrossGen); });
   $('#serverBtn').addEventListener('click', () => openServerDialog());
   $('#charts').appendChild(h('div', { id: 'dividers', class: 'dividers' }));
   new ResizeObserver(() => positionDividers()).observe($('#charts'));

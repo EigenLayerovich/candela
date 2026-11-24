@@ -40,7 +40,7 @@ const events = new EventEmitter(); // 'fired' (event) — the desktop app shows 
 
 // ---------------------------------------------------------------------- shared app code
 globalThis.window = globalThis;
-for (const f of ['indicators.js', 'script.js', 'alerts-core.js', 'data.js']) require(path.join(ROOT, 'js', f));
+for (const f of ['indicators.js', 'script.js', 'alerts-core.js', 'data.js', 'exchanges.js']) require(path.join(ROOT, 'js', f));
 const IND = globalThis.Indicators, CS = globalThis.CandelaScript, AL = globalThis.CandelaAlerts, MD = globalThis.MarketData;
 
 const log = (...a) => console.log(new Date().toISOString().replace('T', ' ').slice(0, 19), ...a);
@@ -244,7 +244,7 @@ async function knownSymbols() {
   return symbolSet;
 }
 async function pollPrices() {
-  const list = db.alerts.filter((a) => !AL.isMarker(a) && a.active && AL.serverEligible(a) && !MD.isStock(a.symbol));
+  const list = db.alerts.filter((a) => !AL.isMarker(a) && a.active && AL.serverEligible(a) && !MD.isStock(a.symbol) && !MD.exchangeOf(a.symbol));
   const syms = [...new Set(list.map((a) => a.symbol))];
   if (!syms.length) return;
   let rows;
@@ -263,6 +263,27 @@ async function pollPrices() {
     }
     lastPrice[row.symbol] = cur;
   }
+}
+
+// Bybit, KuCoin, Kraken, Coinbase: one ticker request per symbol, every 6 s
+let exPolling = false;
+async function pollExchangePrices() {
+  if (exPolling) return;
+  exPolling = true;
+  try {
+    const list = db.alerts.filter((a) => !AL.isMarker(a) && a.active && MD.exchangeOf(a.symbol));
+    await Promise.all([...new Set(list.map((a) => a.symbol))].map(async (sym) => {
+      let cur;
+      try { cur = (await MD.ticker(sym)).c; } catch (e) { return; }
+      if (!isFinite(cur)) return;
+      for (const a of list) {
+        if (a.symbol !== sym || !a.active) continue;
+        const prev = lastPrice[sym] ?? a.refPrice;
+        if (AL.priceCrossed(a, prev, cur)) fire(a, AL.applyPriceFire(a, cur));
+      }
+      lastPrice[sym] = cur;
+    }));
+  } finally { exPolling = false; }
 }
 
 const stockPx = {}; // symbol -> { prev, lastT, lastCheck }
@@ -328,6 +349,8 @@ async function makeAlert(b) {
     if (!STOCK_RE.test(b.symbol)) throw new BadRequest('Unknown symbol');
     if (!db.settings.twelveData.key) throw new BadRequest('The server has no Twelve Data key for stocks yet (open the app from the server to share it)');
     if (b.kind === 'marker' && !MD.supportsTf(b.symbol, b.tf)) throw new BadRequest('That timeframe is not available for stocks');
+  } else if (MD.exchangeOf(b.symbol || '')) {
+    if ((b.symbol || '').length > 40) throw new BadRequest('Unknown symbol');
   } else {
     if (!SYMBOL_RE.test(b.symbol || '')) throw new BadRequest('Unknown symbol');
     const known = await knownSymbols();
@@ -368,6 +391,10 @@ const publicSettings = () => ({
 });
 
 // ---------------------------------------------------------------------- HTTP
+const PROXY_ALLOW = [
+  ['api.kucoin.com', /^\/api\/v[12]\/(market\/(candles|stats|allTickers|orderbook\/level1)|symbols)$/],
+  ['api.bybit.com', /^\/v5\/market\/(kline|tickers|instruments-info)$/],
+];
 const isLoopback = (h) => ['127.0.0.1', 'localhost', '::1', '0:0:0:0:0:0:0:1'].includes(h) || h.startsWith('127.');
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
@@ -419,6 +446,21 @@ async function handleApi(req, res, url) {
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
+  }
+  // Market data from exchanges that don't let web pages call them directly (KuCoin; Bybit in some setups).
+  // Only public market-data addresses on those exchanges, read-only.
+  if (p === '/api/proxy' && m === 'GET') {
+    let target;
+    try { target = new URL(url.searchParams.get('url') || ''); } catch (e) { throw new BadRequest('Bad url'); }
+    if (target.protocol !== 'https:' || target.username || target.password || target.port || !PROXY_ALLOW.some(([host, re]) => target.hostname === host && re.test(target.pathname))) {
+      return send(res, 400, { error: 'Not an allowed market-data address' });
+    }
+    let r;
+    try { r = await fetch(target, { headers: { accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(15000) }); } catch (e) { return send(res, 502, { error: 'The exchange did not answer' }); }
+    const body = Buffer.from(await r.arrayBuffer());
+    if (body.length > 8e6) return send(res, 502, { error: 'Reply too large' });
+    res.writeHead(r.status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+    return res.end(body);
   }
   if (p === '/api/state' && m === 'GET') return send(res, 200, { ...publicState(), scripts: db.scripts.map(({ id, name }) => ({ id, name })) });
 
@@ -552,7 +594,7 @@ function start(opts = {}) {
       MD.loadBStocks().catch(() => {}); // only for nicer names in notifications (NVDAB instead of NVDABUSDT)
       db.scripts.forEach(compileScript);
       syncFeeds();
-      timers.push(setInterval(pollPrices, 5000), setInterval(pollStockPrices, 30000),
+      timers.push(setInterval(pollPrices, 5000), setInterval(pollExchangePrices, 6000), setInterval(pollStockPrices, 30000),
         setInterval(() => { for (const res of clients) res.write(': keep-alive\n\n'); }, 25000));
       const port = server.address().port;
       if (!opts.quiet) {

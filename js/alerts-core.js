@@ -7,6 +7,7 @@
   // TD:AAPL → AAPL, TD:EUR/USD → EUR/USD, NVDABUSDT (Binance bStock) → NVDAB
   const bare = (sym) => {
     const md = root.MarketData;
+    if (md && md.exchangeOf && md.exchangeOf(sym)) return md.displayName(sym); // KRAKEN:BTC/USD → BTC/USD (Kraken)
     if (md && md.isBStock && md.isBStock(sym)) return sym.replace(/USDT$/, '');
     return sym.replace(/^(CSV|TD):/, '').replace(/@.*$/, '');
   };

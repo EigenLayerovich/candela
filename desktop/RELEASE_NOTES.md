@@ -1,3 +1,9 @@
+## New in 1.1.0
+
+- **More crypto exchanges**: Bybit, KuCoin, Kraken and Coinbase, next to Binance. Pick an exchange with the chips in the symbol search. Charts, every timeframe, watchlist, comparisons and alerts all work on them.
+- **Across exchanges** panel: the chart's coin on every exchange, with price, 24h change and the gap to your chart.
+- Bybit is blocked in some countries (for example the US); KuCoin works in this app but not in a plain browser tab.
+
 ## Download
 
 - **Candela-Setup-x.y.z.exe**: installer (recommended). Installs for your user only, no administrator rights needed.

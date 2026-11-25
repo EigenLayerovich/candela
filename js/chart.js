@@ -239,6 +239,8 @@
       this.picking = null;    // a function waiting for a click on the chart (Bar Replay: pick the start)
       this.measure = null;    // a quick measurement (ruler or Shift+click): { a, b, done }; not saved
       this.onAlertMove = () => {}; // an alert line was dragged to a new price
+      this.tradeLines = [];   // paper trading: [{ id, kind: 'pos'|'order'|'sl'|'tp', price, color, label, drag }]
+      this.onTradeLineMove = () => {};
       this.title = '';
       this.info = ''; // a line under the title (funding rate, open interest… on futures)
       this.live = false;
@@ -1056,6 +1058,7 @@
         if (p === this.main) {
           this._drawTrades(p);
           this._drawAlerts(p);
+          this._drawTradeLines(p);
           if (!this.drawingsHidden) for (const dr of this.drawings) if (!dr.hidden) this._drawDrawing(dr, dr === this.selected);
           if (this.creating) this._drawDrawing(this.creating, true);
           if (this.measure) this._drawMeasure();
@@ -1511,6 +1514,7 @@
           }
         }
         for (const al of this.alerts) this._axisLabel(this.yOf(p, al.price), this._fmtMain(al.price), T.alert, '#111', p);
+        for (const l of this.tradeLines) this._axisLabel(this.yOf(p, l.price), this._fmtMain(l.price), l.color, '#fff', p);
         const B = this._dispBars(), last = B[B.length - 1], real = this.raw[this.raw.length - 1] || last;
         const color = last.c >= last.o ? T.up : T.down, y = this.yOf(p, real.c);
         // dotted last-price line
@@ -1596,6 +1600,51 @@
       ctx.save();
       try { DR.TOOLS.measure.draw(DR.pen(ctx, this._dapi(), d, false), d.pts.map((q) => this._pt(q)), d); } finally { ctx.restore(); }
     }
+    // ---- paper trading lines: position (solid), orders, stop loss and take profit (dashed), with a label
+    setTradeLines(lines) { this.tradeLines = lines || []; this.invalidate(); }
+    _drawTradeLines(p) {
+      if (!this.tradeLines.length) return;
+      const ctx = this.ctx;
+      ctx.save();
+      ctx.font = '600 11px ' + getComputedStyle(this.el).fontFamily;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      const placed = []; // label boxes so far: a label that would cover another moves left of it
+      for (const l of this.tradeLines) {
+        l._box = null;
+        const y = Math.round(this.yOf(p, l.price)) + 0.5;
+        if (y < p.top - 10 || y > p.top + p.h + 10) continue;
+        ctx.strokeStyle = l.color;
+        ctx.lineWidth = l.kind === 'pos' ? 1.5 : 1;
+        ctx.setLineDash(l.kind === 'pos' ? [] : [6, 4]);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(this.plotW, y); ctx.stroke();
+        ctx.setLineDash([]);
+        const w = ctx.measureText(l.label).width + 14;
+        let x = this.plotW - w - 70;
+        for (let k = 0; k < placed.length; k++) {
+          const b = placed[k];
+          if (Math.abs(b[1] + 9 - y) < 19 && x < b[2] + 4 && x + w > b[0] - 4) { x = b[0] - w - 6; k = -1; }
+        }
+        x = Math.max(4, x);
+        ctx.fillStyle = l.color;
+        ctx.fillRect(x, y - 9, w, 18);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(l.label, x + 7, y + 0.5);
+        l._box = [x, y - 9, x + w, y + 9];
+        placed.push(l._box);
+      }
+      ctx.restore();
+    }
+    _hitTradeLine(x, y) {
+      if (x >= this.plotW) return null;
+      for (const l of this.tradeLines) {
+        const b = l._box;
+        if (b && x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]) return l;
+        if (Math.abs(this.yOf(this.main, l.price) - y) < 5) return l;
+      }
+      return null;
+    }
+
     // the price alert whose line is under the mouse
     _hitAlert(x, y) {
       if (x >= this.plotW) return null;
@@ -1850,6 +1899,8 @@
         if (reg.r === 'time') { this.drag = { kind: 'xscale', x, sp: this.spacing }; return; }
         if (reg.r === 'plot') {
           // drag a price alert's line up or down
+          const tl = reg.p === this.main ? this._hitTradeLine(x, y) : null;
+          if (tl) { if (tl.drag) { this.drag = { kind: 'tline', l: tl, y, price0: tl.price }; c.style.cursor = 'ns-resize'; } return; }
           const al = reg.p === this.main ? this._hitAlert(x, y) : null;
           if (al) { this.drag = { kind: 'alert', a: al, y, price0: al.price }; c.style.cursor = 'ns-resize'; return; }
           const hit = reg.p === this.main ? this._hitDrawing(x, y) : null;
@@ -1913,6 +1964,11 @@
               this._layout();
               break;
             }
+            case 'tline': {
+              dr.l.price = +this.vOf(this.main, y).toFixed(this.decimals);
+              dr.moved = dr.moved || Math.abs(y - dr.y) > 2;
+              break;
+            }
             case 'alert': {
               const v = this.vOf(this.main, y);
               dr.a.price = +v.toFixed(this.decimals);
@@ -1938,7 +1994,9 @@
           else if (reg.r === 'time') cur = 'ew-resize';
           else if (reg.r === 'divider') cur = 'row-resize';
           else if (reg.r === 'plot' && this.tool === 'cursor' && reg.p === this.main) {
-            if (this._hitAlert(x, y)) cur = 'ns-resize';
+            const tl = this._hitTradeLine(x, y);
+            if (tl) cur = tl.drag ? 'ns-resize' : 'default';
+            else if (this._hitAlert(x, y)) cur = 'ns-resize';
             else {
               const hit = this._hitDrawing(x, y);
               if (hit) cur = hit.handle >= 0 ? 'grab' : 'pointer';
@@ -1955,6 +2013,7 @@
       const end = (e) => {
         const dr = this.drag;
         this.drag = null;
+        if (dr && dr.kind === 'tline') { if (dr.moved && dr.l.price !== dr.price0) this.onTradeLineMove(dr.l, dr.l.price); else dr.l.price = dr.price0; }
         if (dr && dr.kind === 'alert') { if (dr.moved && dr.a.price !== dr.price0) this.onAlertMove(dr.a); else dr.a.price = dr.price0; }
         if (this.measure && !this.measure.done && this.measure.fromDown && this.downAt) {
           const { x, y } = pos(e);
@@ -2033,11 +2092,12 @@
         e.preventDefault();
         const { x, y } = pos(e), reg = this._region(x, y);
         if (this.creating) { this.creating = null; this.invalidate(); return; }
-        const alert = reg.r === 'plot' && reg.p === this.main ? this._hitAlert(x, y) : null;
-        const hit = !alert && reg.r === 'plot' && reg.p === this.main ? this._hitDrawing(x, y) : null;
+        const tradeLine = reg.r === 'plot' && reg.p === this.main ? this._hitTradeLine(x, y) : null;
+        const alert = !tradeLine && reg.r === 'plot' && reg.p === this.main ? this._hitAlert(x, y) : null;
+        const hit = !alert && !tradeLine && reg.r === 'plot' && reg.p === this.main ? this._hitDrawing(x, y) : null;
         if (hit) this.select(hit.d);
         this.onContextMenu({
-          clientX: e.clientX, clientY: e.clientY, drawing: hit ? hit.d : null, alert,
+          clientX: e.clientX, clientY: e.clientY, drawing: hit ? hit.d : null, alert, tradeLine,
           price: reg.p === this.main ? this.vOf(this.main, y) : null,
         });
       });

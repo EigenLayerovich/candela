@@ -1,4 +1,11 @@
-## New in 1.14.0
+## New in 1.15.0
+
+- **Paper trading**: practise with a virtual $100,000 account (Trade button). Market, limit and stop orders with take profit and stop loss; up to 5 accounts; commission and leverage settings.
+- Positions, orders, stops and targets are **lines on the chart**: drag them to move, right-click to cancel or close. Right-click the chart at a price to place a limit or stop order there.
+- **Trade journal**: notes on each fill, journal entries, and stats (win rate, profit factor, best and worst trade).
+- **Trade during Bar Replay** on a practice account, filled candle by candle, with a results card when the replay ends.
+
+## In 1.14.0
 
 - **Measure**: Shift + click on the chart (or the ruler in the toolbar) for a quick price/%/time measurement.
 - **Alerts**: drag a price alert's line to move it; right-click an alert (on the chart or in the list) to edit or remove it.

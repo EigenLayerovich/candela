@@ -222,6 +222,7 @@
       c.onSelect = (d) => this.showDrawBar(d);
       c.onNeedHistory = () => this.loadOlder();
       c.onContextMenu = (info) => showContextMenu(this, info);
+      c.onTradeLineMove = (l, price) => paperLineMoved(this, l, price);
       c.askText = (v) => askText('Text note', v, 'Type your note');
       c.onCrosshairMove = (t) => {
         if (!state.sync.crosshair) return;
@@ -303,7 +304,11 @@
         this.stop = null;
         c.live = false;
         this.replay = { full: c.raw.slice(), idx: 0, timer: null, playing: false };
-      } else this.pauseReplay();
+      } else {
+        this.pauseReplay();
+        // a new start: the practice trades so far end here
+        if (this.replay.paper) { replayResults(this, this.replay.paper, this.replay.full[this.replay.idx].c); delete this.replay.paper; }
+      }
       const R = this.replay;
       let idx = R.full.length - 1;
       while (idx > 0 && R.full[idx].t > t) idx--;
@@ -316,6 +321,7 @@
       this.setStatus('replay');
       this.renderReplayBar();
       testerRefreshSoon(this, 0);
+      paperRefresh();
       updateHeader();
     }
     replayStep() {
@@ -324,6 +330,7 @@
       if (R.idx >= R.full.length - 1) { this.pauseReplay(); toast('The replay reached the latest candle. Exit the replay to go back to live data.', 'info', 5000); return; }
       R.idx++;
       this.chart.updateBar(R.full[R.idx]);
+      paperReplayBar(this);
       this.replayTfSources();
       this.alignCompares();
       this.renderReplayBar();
@@ -354,7 +361,9 @@
       this.chart.cancelPick();
       if (!R) return;
       clearTimeout(R.timer);
+      if (R.paper) replayResults(this, R.paper, R.full[R.idx].c);
       this.replay = null;
+      paperRefresh();
       if (this.replayBar) { this.replayBar.remove(); this.replayBar = null; }
       if (reload) this.load(this.symbol, this.tf);
       if (this === active) updateHeader();
@@ -601,6 +610,7 @@
       c.watermark = `${bare(sym)}, ${sym.startsWith('CSV:') ? 'CSV' : tfName(tf)}`;
       c.countdown = !isStock(sym) && !/M$/.test(tf); // stock bars don't close on the clock (sessions, closed markets)
       c.setData(bars, interval, { resetView: true });
+      refreshTradeLines();
       if (this === active) updateHeader();
       if (this.mode === 'live') {
         c.live = true;
@@ -883,6 +893,7 @@
     updateDocTitle();
     save();
     if (state.tester.open) runTester();
+    if (state.paper.open) renderTrading();
     updateUndoButtons();
     renderObjTree();
   }
@@ -1249,6 +1260,7 @@
     $('#settingsBtn').addEventListener('click', openChartSettings);
     $('#replayBtn').addEventListener('click', () => { if (active.replay) active.exitReplay(); else if (active.chart.picking) { active.chart.cancelPick(); updateHeader(); } else active.startReplayPick(); });
     $('#testerBtn').addEventListener('click', () => (state.tester.open ? closeTester() : openTester()));
+    $('#tradeBtn').addEventListener('click', () => (state.paper.open ? closeTrading() : openTrading()));
     $('#logBtn').addEventListener('click', () => {
       const c = active.chart;
       active.cfg.log = !active.cfg.log;
@@ -1292,6 +1304,7 @@
     $('#replayBtn span').textContent = active.replay ? 'Exit replay' : 'Replay';
     $('#replayBtn').title = active.replay ? 'Exit the replay and go back to live data' : 'Bar Replay: play history back candle by candle';
     $('#testerBtn').classList.toggle('active', !!state.tester.open);
+    $('#tradeBtn').classList.toggle('active', !!state.paper.open);
     $('#logBtn').classList.toggle('active', !!active.cfg.log);
     const comparing = active.chart.compares.some((c) => c.visible);
     $('#pctBtn').classList.toggle('active', comparing || !!active.cfg.percent);
@@ -2627,7 +2640,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (PREVIEW) return;
     if (tickStop) tickStop();
     tickStop = null;
-    const syms = [...new Set([...state.watchlist, ...priceAlerts().filter((a) => a.active).map((a) => a.symbol)])]
+    const syms = [...new Set([...state.watchlist, ...priceAlerts().filter((a) => a.active).map((a) => a.symbol), ...paperSyms()])]
       .filter((s) => !isDemo(s) && !s.startsWith('CSV:') && !isStock(s) && !exOf(s));
     pollStockQuotes();
     pollExQuotes();
@@ -2647,7 +2660,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     exQuoteTimer = null;
     if (PREVIEW) return;
     const alertSyms = priceAlerts().filter((a) => a.active && exOf(a.symbol) && !servedByServer(a)).map((a) => a.symbol);
-    const syms = [...new Set([...state.watchlist.filter(exOf), ...alertSyms])];
+    const tradeSyms = paperSyms().filter(exOf);
+    const syms = [...new Set([...state.watchlist.filter(exOf), ...alertSyms, ...tradeSyms])];
     if (!syms.length) return;
     await Promise.all(syms.map(async (sym) => {
       let q;
@@ -2655,7 +2669,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       updateQuote(sym, q.c, q.o);
       if (!slots.some((x) => x.symbol === sym && x.mode === 'live')) checkAlerts(sym, q.c);
     }));
-    exQuoteTimer = setTimeout(pollExQuotes, alertSyms.length ? 5000 : 10000);
+    exQuoteTimer = setTimeout(pollExQuotes, alertSyms.length || tradeSyms.length ? 5000 : 10000);
   }
 
   // ---- the chart's coin on every exchange (side panel): price, 24h change, and the gap to this chart
@@ -2749,7 +2763,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     stockQuoteTimer = null;
     if (PREVIEW || !state.stocks.key) return;
     const alertSyms = priceAlerts().filter((a) => a.active && isStock(a.symbol) && !servedByServer(a)).map((a) => a.symbol);
-    const syms = [...new Set([...state.watchlist.filter(isStock), ...alertSyms])];
+    const syms = [...new Set([...state.watchlist.filter(isStock), ...alertSyms, ...paperSyms().filter(isStock)])];
     if (!syms.length) return;
     const want = stockQuotesPrimed ? syms.filter((x) => MD.marketOpen(x)) : syms; // once at start, then only what trades
     if (want.length) {
@@ -3091,6 +3105,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
 
   const lastPxT = {};
   function checkAlerts(sym, price) {
+    paperTick(sym, price);
     const prev = lastPx[sym], prevT = lastPxT[sym], now = Date.now();
     lastPx[sym] = price;
     lastPxT[sym] = now;
@@ -3277,6 +3292,441 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     });
   }
 
+  // ---- Paper trading: practice accounts with virtual money. Orders fill on the live prices Candela
+  // already receives (charts, watchlist, alerts). During a Bar Replay the replaying chart trades on its own
+  // temporary account, filled candle by candle, with a results card when the replay ends.
+  const PT = window.CandelaPaper;
+  if (!state.paper || !Array.isArray(state.paper.accounts) || !state.paper.accounts.length) state.paper = { accounts: [PT.newAccount('Paper account', 100000)] };
+  state.paper = { active: 0, open: false, tab: 'positions', lines: true, ...state.paper };
+  for (const a of state.paper.accounts) { if (!a.leverage) a.leverage = 1; if (!Array.isArray(a.notes)) a.notes = []; }
+  const PAPER_COLORS = { long: '#1f9d6b', short: '#d9465b', buy: '#3b6ff5', sell: '#e2781f', sl: '#d9465b', tp: '#1f9d6b', profit: '#1f9d6b', loss: '#d9465b' };
+  const paperMain = () => state.paper.accounts[state.paper.active] || state.paper.accounts[0];
+  // the account a chart trades on: its replay account while replaying, else the selected paper account
+  function paperAccFor(slot) {
+    if (slot && slot.replay) {
+      const R = slot.replay;
+      if (!R.paper) { const m = paperMain(); R.paper = PT.newAccount('Replay practice', m.start); R.paper.commission = m.commission; R.paper.leverage = m.leverage; R.paper.replay = true; }
+      return R.paper;
+    }
+    return paperMain();
+  }
+  // latest price of a symbol for an account (a replay account only knows its own chart's candles)
+  function paperPrice(acc, sym) {
+    if (acc.replay) { const s = slots.find((x) => x.replay && x.replay.paper === acc); return s ? s.replay.full[s.replay.idx].c : null; }
+    const s = slots.find((x) => x.symbol === sym && !x.replay && x.chart.raw.length);
+    return s ? s.chart.raw[s.chart.raw.length - 1].c : lastPx[sym] ?? null;
+  }
+  const paperPrices = (acc) => Object.fromEntries([...Object.keys(acc.positions), ...acc.orders.map((o) => o.sym)].map((s) => [s, paperPrice(acc, s)]).filter(([, p]) => p > 0));
+  // symbols the selected account needs prices for (open positions and waiting orders)
+  const paperSyms = () => { const a = paperMain(); return [...new Set([...Object.keys(a.positions), ...a.orders.map((o) => o.sym)])]; };
+  let paperSymsKey = '';
+  function paperWatchSyms() {
+    const k = paperSyms().sort().join(',');
+    if (k !== paperSymsKey) { paperSymsKey = k; startTickers(); }
+  }
+  const fmtQty = (q) => (+(+q).toPrecision(6)).toLocaleString(undefined, { maximumFractionDigits: 8 });
+  const fmtPx = (sym, p) => { const s = slots.find((x) => x.symbol === sym); return p == null ? '–' : s ? s.chart.fmtPrice(p) : (+p.toPrecision(8)).toString(); };
+
+  // a new price for a symbol (from charts, the watchlist feeds and alert feeds)
+  function paperTick(sym, price) {
+    const acc = paperMain();
+    if (!acc.positions[sym] && !acc.orders.some((o) => o.sym === sym)) return;
+    const fills = PT.onPrice(acc, sym, price).filter(Boolean);
+    if (fills.length) paperFilled(acc, fills, true);
+    else paperRefreshSoon();
+  }
+  function paperFilled(acc, fills, triggered) {
+    if (!acc.replay) save();
+    for (const f of fills) {
+      const verb = f.side === 'buy' ? 'Bought' : 'Sold';
+      const pnl = f.realized ? ` · P&L ${f.realized > 0 ? '+' : ''}${fmtMoney(f.realized)}` : '';
+      toast(`${f.reason}: ${verb} ${fmtQty(f.qty)} ${bare(f.sym)} at ${fmtPx(f.sym, f.price)}${pnl}${acc.replay ? ' (replay)' : ''}`, f.realized < 0 ? 'warn' : 'info', 6000);
+    }
+    if (triggered && !acc.replay) beep();
+    paperWatchSyms();
+    paperRefresh();
+  }
+  let paperTimer = null;
+  function paperRefreshSoon() {
+    if (paperTimer) return;
+    paperTimer = setTimeout(() => { paperTimer = null; paperRefresh(); }, 700);
+  }
+  function paperRefresh() {
+    clearTimeout(paperTimer);
+    paperTimer = null;
+    refreshTradeLines();
+    if (state.paper.open) renderTrading();
+  }
+
+  // position, orders, stop loss and take profit as lines on each chart
+  function refreshTradeLines() {
+    for (const s of slots) {
+      const lines = [];
+      if (state.paper.lines !== false) {
+        const acc = paperAccFor(s), sym = s.symbol, pos = acc.positions[sym], px = paperPrice(acc, sym);
+        if (pos) {
+          const pnl = PT.unrealized(pos, px), long = pos.qty > 0;
+          lines.push({ id: 'pos', kind: 'pos', price: pos.avg, color: long ? PAPER_COLORS.long : PAPER_COLORS.short, label: `${long ? 'LONG' : 'SHORT'} ${fmtQty(Math.abs(pos.qty))}   ${pnl >= 0 ? '+' : ''}${fmtMoney(pnl)}` });
+          if (pos.sl > 0) lines.push({ id: 'sl', kind: 'sl', price: pos.sl, color: PAPER_COLORS.sl, drag: true, label: `SL  ${fmtMoney((pos.sl - pos.avg) * pos.qty)}` });
+          if (pos.tp > 0) lines.push({ id: 'tp', kind: 'tp', price: pos.tp, color: PAPER_COLORS.tp, drag: true, label: `TP  +${fmtMoney(Math.abs((pos.tp - pos.avg) * pos.qty))}` });
+        }
+        for (const o of acc.orders) {
+          if (o.sym !== sym) continue;
+          lines.push({ id: o.id, kind: 'order', price: o.price, color: o.side === 'buy' ? PAPER_COLORS.buy : PAPER_COLORS.sell, drag: true, label: `${o.side.toUpperCase()} ${o.type.toUpperCase()} ${fmtQty(o.qty)}` });
+          if (o.sl > 0) lines.push({ id: o.id + ':sl', kind: 'osl', order: o.id, price: o.sl, color: PAPER_COLORS.sl, drag: true, label: 'SL (order)' });
+          if (o.tp > 0) lines.push({ id: o.id + ':tp', kind: 'otp', order: o.id, price: o.tp, color: PAPER_COLORS.tp, drag: true, label: 'TP (order)' });
+        }
+      }
+      s.chart.setTradeLines(lines);
+    }
+  }
+  // a line was dragged to a new price
+  function paperLineMoved(slot, l, price) {
+    const acc = paperAccFor(slot), pos = acc.positions[slot.symbol];
+    const order = acc.orders.find((o) => o.id === (l.order || l.id));
+    if (l.kind === 'sl' && pos) pos.sl = price;
+    else if (l.kind === 'tp' && pos) pos.tp = price;
+    else if (l.kind === 'order' && order) order.price = price;
+    else if (l.kind === 'osl' && order) order.sl = price;
+    else if (l.kind === 'otp' && order) order.tp = price;
+    if (!acc.replay) save();
+    toast(`${{ sl: 'Stop loss', tp: 'Take profit', order: 'Order price', osl: 'Order stop loss', otp: 'Order take profit' }[l.kind]} moved to ${slot.chart.fmtPrice(price)}`, 'info', 1800);
+    // a stop loss dragged past the price triggers on the next price, like a real platform
+    paperRefresh();
+  }
+  function paperRemoveBracket(slot, l) {
+    const acc = paperAccFor(slot), pos = acc.positions[slot.symbol], order = acc.orders.find((o) => o.id === l.order);
+    if (l.kind === 'sl' && pos) delete pos.sl;
+    if (l.kind === 'tp' && pos) delete pos.tp;
+    if (l.kind === 'osl' && order) order.sl = null;
+    if (l.kind === 'otp' && order) order.tp = null;
+    if (!acc.replay) save();
+    paperRefresh();
+  }
+  function paperCancel(acc, id) {
+    PT.cancelOrder(acc, id);
+    if (!acc.replay) save();
+    toast('Order cancelled', 'info', 1500);
+    paperWatchSyms();
+    paperRefresh();
+  }
+  function paperClose(acc, sym) {
+    const px = paperPrice(acc, sym);
+    if (!(px > 0)) { toast(`No price for ${bare(sym)} yet. Open its chart or add it to the watchlist.`, 'warn'); return; }
+    const f = PT.closePosition(acc, sym, px, acc.replay ? replayTime(acc) : Date.now(), 'Closed');
+    if (f) paperFilled(acc, [f], false);
+  }
+  const replayTime = (acc) => { const s = slots.find((x) => x.replay && x.replay.paper === acc); return s ? s.replay.full[s.replay.idx].t : Date.now(); };
+
+  // Order ticket. pre: { side, type, price }
+  function openOrderTicket(slot, pre = {}) {
+    slot = slot || active;
+    const acc = paperAccFor(slot), sym = slot.symbol, c = slot.chart;
+    if (sym.startsWith('CSV:')) { toast('Paper trading needs live prices; CSV files have none.', 'warn'); return; }
+    const last = paperPrice(acc, sym);
+    let side = pre.side || 'buy';
+    const sideBtns = ['buy', 'sell'].map((k) => h('button', { type: 'button', class: 'pt-side ' + k, onclick: () => { side = k; sync(); } }, k === 'buy' ? 'Buy' : 'Sell'));
+    const type = h('select', {}, [['market', 'Market'], ['limit', 'Limit'], ['stop', 'Stop']].map(([v, l]) => h('option', { value: v }, l)));
+    type.value = pre.type || 'market';
+    const num = (v, ph = '') => h('input', { type: 'number', step: 'any', min: 0, value: v ?? '', placeholder: ph });
+    const price = num(pre.price != null ? +c.fmtPrice(pre.price) : '', last ? c.fmtPrice(last) : '');
+    const qty = num('', '0'), usd = num('', '0');
+    const tpOn = h('input', { type: 'checkbox' }), slOn = h('input', { type: 'checkbox' });
+    const tp = num(''), sl = num('');
+    const info = h('p', { class: 'muted pt-info' });
+    const err = h('p', { class: 'pt-err' });
+    const refPx = () => (type.value === 'market' ? last : +price.value || last);
+    // keep quantity and money amount in step
+    qty.addEventListener('input', () => { const p = refPx(); usd.value = p && +qty.value ? (+qty.value * p).toFixed(2) : ''; sync(); });
+    usd.addEventListener('input', () => { const p = refPx(); qty.value = p && +usd.value ? +(+usd.value / p).toPrecision(6) : ''; sync(); });
+    // default brackets about 2% / 4% away when ticked
+    tpOn.addEventListener('change', () => { if (tpOn.checked && !tp.value) { const p = refPx(); if (p) tp.value = c.fmtPrice(p * (side === 'buy' ? 1.04 : 0.96)); } sync(); });
+    slOn.addEventListener('change', () => { if (slOn.checked && !sl.value) { const p = refPx(); if (p) sl.value = c.fmtPrice(p * (side === 'buy' ? 0.98 : 1.02)); } sync(); });
+    type.addEventListener('change', sync);
+    price.addEventListener('input', () => { if (+qty.value) { const p = refPx(); usd.value = p ? (+qty.value * p).toFixed(2) : ''; } sync(); });
+    tp.addEventListener('input', sync);
+    sl.addEventListener('input', sync);
+    const pctBtns = h('span', { class: 'pt-pcts' }, [10, 25, 50, 100].map((p) => h('button', { type: 'button', class: 'btn ghost small', onclick: () => {
+      const e = PT.equity(acc, paperPrices(acc)).equity * (acc.leverage || 1), px = refPx();
+      if (!px) return;
+      usd.value = ((e * p) / 100 / (1 + (acc.commission || 0) / 100)).toFixed(2);
+      qty.value = +(+usd.value / px).toPrecision(6);
+      sync();
+    } }, p + '%')));
+    const row = (label, ...ctl) => h('label', {}, h('span', {}, label), h('span', { class: 'pt-ctl' }, ...ctl));
+    const priceRow = row('Price', price);
+    const form = h('div', { class: 'form pt-ticket' },
+      h('div', { class: 'pt-sides' }, sideBtns),
+      row('Order type', type), priceRow,
+      row('Quantity', qty, h('small', { class: 'muted' }, bare(sym))),
+      row('Amount', usd, h('small', { class: 'muted' }, 'USD')),
+      h('div', { class: 'pt-pctrow' }, h('span', { class: 'muted' }, 'Of equity'), pctBtns),
+      row('Take profit', tpOn, tp), row('Stop loss', slOn, sl),
+      info, err);
+    function sync() {
+      for (const b of sideBtns) b.classList.toggle('on', b.classList.contains(side));
+      priceRow.classList.toggle('hidden', type.value === 'market');
+      tp.disabled = !tpOn.checked;
+      sl.disabled = !slOn.checked;
+      const p = refPx(), q = +qty.value;
+      const what = type.value === 'market' ? 'at the market price' : type.value === 'limit'
+        ? (side === 'buy' ? 'when the price falls to the limit or below' : 'when the price rises to the limit or above')
+        : (side === 'buy' ? 'when the price rises to the stop or above' : 'when the price falls to the stop or below');
+      const risk = [];
+      if (q && p && tpOn.checked && +tp.value) risk.push(`reward ${fmtMoney(Math.abs(+tp.value - p) * q)}`);
+      if (q && p && slOn.checked && +sl.value) risk.push(`risk ${fmtMoney(Math.abs(+sl.value - p) * q)}`);
+      info.textContent = `${side === 'buy' ? 'Buys' : 'Sells'} ${what}. Last price ${last ? c.fmtPrice(last) : '–'} · ${acc.name}: ${fmtMoney(PT.equity(acc, paperPrices(acc)).equity)} equity${risk.length ? ' · ' + risk.join(', ') : ''}.`;
+      submit.textContent = `${side === 'buy' ? 'Buy' : 'Sell'} ${q ? fmtQty(q) + ' ' : ''}${bare(sym)}`;
+      submit.className = 'btn primary pt-submit ' + side;
+      err.textContent = '';
+    }
+    const submit = h('button', { class: 'btn primary' }, 'Place order');
+    submit.addEventListener('click', () => {
+      const o = { sym, side, type: type.value, qty: +qty.value, price: type.value === 'market' ? undefined : +price.value,
+        tp: tpOn.checked ? +tp.value || null : null, sl: slOn.checked ? +sl.value || null : null };
+      const p = o.type === 'market' ? last : o.price;
+      // brackets on the right side of the entry
+      if (p && o.tp && (side === 'buy' ? o.tp <= p : o.tp >= p)) { err.textContent = `The take profit must be ${side === 'buy' ? 'above' : 'below'} the entry price.`; return; }
+      if (p && o.sl && (side === 'buy' ? o.sl >= p : o.sl <= p)) { err.textContent = `The stop loss must be ${side === 'buy' ? 'below' : 'above'} the entry price.`; return; }
+      // buying power: the positions after this order can't be worth more than equity × leverage
+      if (p && o.qty > 0) {
+        const prices = paperPrices(acc), e = PT.equity(acc, prices).equity, cur = acc.positions[sym]?.qty || 0;
+        const after = cur + (side === 'buy' ? o.qty : -o.qty);
+        let exposure = Math.abs(after) * p;
+        for (const [s2, ps] of Object.entries(acc.positions)) if (s2 !== sym) exposure += Math.abs(ps.qty) * (prices[s2] || ps.avg);
+        if (Math.abs(after) > Math.abs(cur) && exposure > e * (acc.leverage || 1) * 1.0001) { err.textContent = `Not enough buying power: this needs ${fmtMoney(exposure)} of positions, the account allows ${fmtMoney(e * (acc.leverage || 1))} (equity × leverage ${acc.leverage || 1}). Lower the quantity or raise the leverage in the Account tab.`; return; }
+      }
+      try {
+        const res = PT.placeOrder(acc, o, last, acc.replay ? replayTime(acc) : Date.now());
+        m.close();
+        if (res.filled) paperFilled(acc, [res.filled], false);
+        else { if (!acc.replay) save(); toast(`${side === 'buy' ? 'Buy' : 'Sell'} ${o.type} order placed: ${fmtQty(o.qty)} ${bare(sym)} at ${c.fmtPrice(o.price)}`, 'info', 2500); paperWatchSyms(); paperRefresh(); }
+        if (!state.paper.open) openTrading();
+      } catch (e) { err.textContent = e.message; }
+    });
+    const m = openModal(`${bare(sym)} · ${acc.replay ? 'Replay practice' : 'Paper trading'}`, form, { cls: 'pt-modal',
+      footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'), submit] });
+    sync();
+    (type.value === 'market' ? qty : price).focus();
+  }
+
+  // edit a position's take profit and stop loss
+  function editBrackets(slot, sym, acc = paperAccFor(slot)) {
+    const pos = acc.positions[sym];
+    if (!pos) return;
+    const tp = h('input', { type: 'number', step: 'any', min: 0, value: pos.tp || '', placeholder: 'none' });
+    const sl = h('input', { type: 'number', step: 'any', min: 0, value: pos.sl || '', placeholder: 'none' });
+    const err = h('p', { class: 'pt-err' });
+    const form = h('div', { class: 'form' }, h('label', {}, h('span', {}, 'Position'), h('b', {}, `${pos.qty > 0 ? 'Long' : 'Short'} ${fmtQty(Math.abs(pos.qty))} ${bare(sym)} at ${fmtPx(sym, pos.avg)}`)),
+      h('label', {}, h('span', {}, 'Take profit'), tp), h('label', {}, h('span', {}, 'Stop loss'), sl), err);
+    const m = openModal('Take profit and stop loss', form, { footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: () => {
+        const px = paperPrice(acc, sym) || pos.avg, long = pos.qty > 0, t = +tp.value, s = +sl.value;
+        if (t && (long ? t <= px : t >= px)) { err.textContent = `The take profit must be ${long ? 'above' : 'below'} the current price.`; return; }
+        if (s && (long ? s >= px : s <= px)) { err.textContent = `The stop loss must be ${long ? 'below' : 'above'} the current price.`; return; }
+        if (t) pos.tp = t; else delete pos.tp;
+        if (s) pos.sl = s; else delete pos.sl;
+        if (!acc.replay) save();
+        m.close();
+        paperRefresh();
+      } }, 'Save')] });
+  }
+
+  // ---- the Trading panel (bottom, in place of the Strategy Tester)
+  function openTrading() {
+    if (state.tester.open) closeTester();
+    state.paper.open = true;
+    save();
+    $('#trading').classList.remove('hidden');
+    $('.chart-wrap').classList.add('with-tester');
+    $('.chart-wrap').style.setProperty('--tester-h', state.tester.height + 'px');
+    renderTrading();
+    updateHeader();
+  }
+  function closeTrading() {
+    state.paper.open = false;
+    save();
+    $('#trading').classList.add('hidden');
+    if (!state.tester.open) $('.chart-wrap').classList.remove('with-tester');
+    updateHeader();
+  }
+  function renderTrading() {
+    const box = $('#trading'), slot = active, acc = paperAccFor(slot), prices = paperPrices(acc), eq = PT.equity(acc, prices);
+    const keepScroll = box.querySelector('.tt-body')?.scrollTop || 0;
+    if (box.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return; // don't disturb typing
+    box.innerHTML = '';
+    const grip = h('div', { class: 'tt-grip', title: 'Drag to resize' });
+    grip.addEventListener('pointerdown', (e) => {
+      const y0 = e.clientY, h0 = state.tester.height, wrap = $('.chart-wrap');
+      grip.setPointerCapture(e.pointerId);
+      const move = (ev) => { state.tester.height = Math.max(150, Math.min(wrap.clientHeight * 0.75, h0 + (y0 - ev.clientY))); wrap.style.setProperty('--tester-h', state.tester.height + 'px'); };
+      const up = () => { grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); save(); positionDividers(); };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+    });
+    const cls = (v) => (v > 0.005 ? 'up' : v < -0.005 ? 'down' : '');
+    const pick = acc.replay ? h('span', { class: 'pt-acc replay', title: 'While a chart replays, it trades on its own practice account. It is cleared when the replay ends.' }, 'Replay practice')
+      : h('select', { class: 'tt-pick', title: 'Paper account', onchange: (e) => { state.paper.active = +e.target.value; save(); paperWatchSyms(); paperRefresh(); } },
+        state.paper.accounts.map((a, i) => h('option', { value: i, selected: i === state.paper.active }, a.name)));
+    const stat = (label, v, k = '') => h('span', { class: 'pt-stat' }, h('small', { class: 'muted' }, label), h('b', { class: k }, v));
+    const tabs = h('div', { class: 'tt-tabs', role: 'tablist' }, [['positions', `Positions${Object.keys(acc.positions).length ? ' ' + Object.keys(acc.positions).length : ''}`], ['orders', `Orders${acc.orders.length ? ' ' + acc.orders.length : ''}`], ['history', 'History'], ['journal', 'Journal'], ['account', 'Account']].map(([k, label]) =>
+      h('button', { class: 'tt-tab' + (state.paper.tab === k ? ' on' : ''), role: 'tab', onclick: () => { state.paper.tab = k; save(); renderTrading(); } }, label)));
+    box.append(grip, h('div', { class: 'tt-head pt-head' },
+      h('b', {}, 'Paper trading'), pick,
+      stat('Equity', fmtMoney(eq.equity)), stat('Cash', fmtMoney(acc.cash)), stat('Open P&L', (eq.unrealized > 0 ? '+' : '') + fmtMoney(eq.unrealized), cls(eq.unrealized)),
+      stat('Total P&L', pctTxt(((eq.equity - acc.start) / acc.start) * 100), cls(eq.equity - acc.start)),
+      tabs, h('span', { class: 'spacer' }),
+      h('button', { class: 'btn pt-buy', title: `Buy ${bare(slot.symbol)}`, onclick: () => openOrderTicket(slot, { side: 'buy' }) }, 'Buy'),
+      h('button', { class: 'btn pt-sell', title: `Sell ${bare(slot.symbol)}`, onclick: () => openOrderTicket(slot, { side: 'sell' }) }, 'Sell'),
+      h('button', { class: 'icon-btn', title: 'Close', onclick: closeTrading }, '✕')));
+    const body = h('div', { class: 'tt-body' });
+    box.appendChild(body);
+    const table = (head, rows, empty) => {
+      if (!rows.length) return h('div', { class: 'tt-empty muted' }, empty);
+      return h('div', { class: 'tt-table-wrap' }, h('table', { class: 'tt-table pt-table' }, h('thead', {}, h('tr', {}, head.map((x) => h('th', {}, x)))), h('tbody', {}, rows)));
+    };
+    const goto = (sym) => () => { if (active.symbol !== sym && !acc.replay) openSymbol(sym); };
+    const tab = state.paper.tab;
+    if (tab === 'positions') {
+      const rows = Object.entries(acc.positions).map(([sym, p]) => {
+        const px = prices[sym], u = PT.unrealized(p, px), long = p.qty > 0;
+        return h('tr', { onclick: goto(sym), title: 'Open the chart' },
+          h('td', {}, h('b', {}, bare(sym))), h('td', { class: long ? 'long' : 'short' }, long ? 'Long' : 'Short'), h('td', {}, fmtQty(Math.abs(p.qty))),
+          h('td', {}, fmtPx(sym, p.avg)), h('td', {}, fmtPx(sym, px)), h('td', {}, fmtMoney(Math.abs(p.qty) * (px || p.avg))),
+          h('td', { class: cls(u) }, (u > 0 ? '+' : '') + fmtMoney(u)), h('td', { class: cls(u) }, pctTxt(((px - p.avg) / p.avg) * 100 * Math.sign(p.qty))),
+          h('td', {}, p.tp ? fmtPx(sym, p.tp) : '–'), h('td', {}, p.sl ? fmtPx(sym, p.sl) : '–'),
+          h('td', { class: 'pt-acts' }, h('button', { class: 'btn ghost small', onclick: (e) => { e.stopPropagation(); editBrackets(slot, sym, acc); } }, 'TP / SL'),
+            h('button', { class: 'btn ghost small', onclick: (e) => { e.stopPropagation(); paperClose(acc, sym); } }, 'Close')));
+      });
+      body.append(table(['Symbol', 'Side', 'Quantity', 'Avg price', 'Last', 'Value', 'Open P&L', 'P&L %', 'Take profit', 'Stop loss', ''], rows,
+        acc.replay ? 'No open positions. Use Buy / Sell above, or right-click the chart, to trade while the replay plays.' : 'No open positions. Use Buy / Sell above, or right-click the chart at a price to place an order there.'));
+    } else if (tab === 'orders') {
+      const rows = acc.orders.slice().reverse().map((o) => h('tr', { onclick: goto(o.sym), title: 'Open the chart' },
+        h('td', {}, h('b', {}, bare(o.sym))), h('td', { class: o.side === 'buy' ? 'long' : 'short' }, o.side === 'buy' ? 'Buy' : 'Sell'), h('td', {}, o.type === 'limit' ? 'Limit' : 'Stop'),
+        h('td', {}, fmtQty(o.qty)), h('td', {}, fmtPx(o.sym, o.price)), h('td', {}, fmtPx(o.sym, prices[o.sym])), h('td', {}, o.tp ? fmtPx(o.sym, o.tp) : '–'), h('td', {}, o.sl ? fmtPx(o.sym, o.sl) : '–'),
+        h('td', {}, active.chart.fmtTimeFull(o.created)),
+        h('td', { class: 'pt-acts' }, h('button', { class: 'btn ghost small', onclick: (e) => { e.stopPropagation(); paperCancel(acc, o.id); } }, 'Cancel'))));
+      body.append(table(['Symbol', 'Side', 'Type', 'Quantity', 'Price', 'Last', 'Take profit', 'Stop loss', 'Placed', ''], rows, 'No waiting orders. Limit and stop orders wait here until the price reaches them; drag their line on the chart to move them.'));
+    } else if (tab === 'history') {
+      const rows = acc.history.slice().reverse().map((f) => {
+        const note = h('input', { class: 'pt-note', value: f.note || '', placeholder: 'Add a note…', onclick: (e) => e.stopPropagation() });
+        note.addEventListener('change', () => { f.note = note.value.trim(); if (!acc.replay) save(); });
+        return h('tr', { onclick: goto(f.sym), title: 'Open the chart' },
+          h('td', {}, active.chart.fmtTimeFull(f.t)), h('td', {}, h('b', {}, bare(f.sym))), h('td', { class: f.side === 'buy' ? 'long' : 'short' }, f.side === 'buy' ? 'Buy' : 'Sell'),
+          h('td', {}, fmtQty(f.qty)), h('td', {}, fmtPx(f.sym, f.price)), h('td', {}, fmtMoney(f.fee)),
+          h('td', { class: cls(f.realized) }, f.realized ? (f.realized > 0 ? '+' : '') + fmtMoney(f.realized) : ''), h('td', {}, f.reason), h('td', {}, note));
+      });
+      body.append(table(['Time', 'Symbol', 'Side', 'Quantity', 'Price', 'Fee', 'Realized P&L', 'Reason', 'Note'], rows, 'No fills yet.'));
+    } else if (tab === 'journal') {
+      const sm = PT.summary(acc), closes = acc.history.filter((f) => f.realized);
+      const best = closes.reduce((a, f) => Math.max(a, f.realized), 0), worst = closes.reduce((a, f) => Math.min(a, f.realized), 0);
+      const gross = closes.reduce((a, f) => a + Math.max(0, f.realized), 0), lost = closes.reduce((a, f) => a + Math.min(0, f.realized), 0);
+      const cell = (label, v, k = '') => h('div', { class: 'tt-stat' }, h('span', { class: 'muted' }, label), h('b', { class: k }, v));
+      const text = h('textarea', { class: 'pt-jtext', rows: 3, placeholder: `What did you see on ${bare(slot.symbol)}? Why did you enter or exit? What will you do differently?` });
+      const add = h('button', { class: 'btn primary', onclick: () => {
+        const v = text.value.trim();
+        if (!v) { text.focus(); return; }
+        acc.notes.push({ id: Math.random().toString(36).slice(2, 10), t: Date.now(), sym: slot.symbol, text: v });
+        if (!acc.replay) save();
+        text.value = '';
+        text.blur();
+        renderTrading();
+      } }, 'Add to journal');
+      body.append(h('div', { class: 'pt-journal' },
+        h('div', { class: 'tt-stats pt-jstats' },
+          cell('Closed trades', String(sm.trades)), cell('Win rate', sm.trades ? sm.winRate.toFixed(1) + '%' : '–'),
+          cell('Profit factor', lost ? (gross / -lost).toFixed(2) : gross ? '∞' : '–'),
+          cell('Best trade', fmtMoney(best), cls(best)), cell('Worst trade', fmtMoney(worst), cls(worst)),
+          cell('Fees paid', fmtMoney(eq.fees)), cell('Net P&L', (sm.net > 0 ? '+' : '') + fmtMoney(sm.net), cls(sm.net))),
+        h('div', { class: 'pt-jcol' }, h('div', { class: 'pt-jadd' }, text, add),
+          h('div', { class: 'pt-jlist' }, acc.notes.length ? acc.notes.slice().reverse().map((n) => h('div', { class: 'pt-jitem' },
+            h('div', { class: 'pt-jmeta muted' }, `${active.chart.fmtTimeFull(n.t)} · ${bare(n.sym)}`,
+              h('button', { class: 'icon-btn', title: 'Delete this entry', onclick: () => { acc.notes = acc.notes.filter((x) => x !== n); if (!acc.replay) save(); renderTrading(); } }, '✕')),
+            h('div', {}, n.text))) : h('p', { class: 'muted' }, 'Your journal is empty. Notes on single fills go in the History tab.')))));
+    } else {
+      const num = (v, attrs = {}) => h('input', { type: 'number', step: 'any', min: 0, value: v, ...attrs });
+      const comm = num(acc.commission), lev = num(acc.leverage || 1, { min: 1, max: 100, step: 1 }), bal = num(acc.start, { min: 100 });
+      comm.addEventListener('change', () => { if (+comm.value >= 0 && +comm.value < 5) { acc.commission = +comm.value; if (!acc.replay) save(); } else comm.value = acc.commission; });
+      lev.addEventListener('change', () => { const v = Math.round(+lev.value); if (v >= 1 && v <= 100) { acc.leverage = v; if (!acc.replay) save(); } else lev.value = acc.leverage; });
+      const showLines = h('input', { type: 'checkbox', checked: state.paper.lines !== false, onchange: (e) => { state.paper.lines = e.target.checked; save(); refreshTradeLines(); } });
+      const row = (label, ctl, help) => h('label', {}, h('span', {}, label), h('span', { class: 'tt-in' }, ctl), h('small', { class: 'muted tt-help' }, help));
+      const acts = acc.replay ? [] : [
+        h('button', { class: 'btn ghost', onclick: async () => { const n = await askText('Rename account', acc.name); if (n) { acc.name = n.slice(0, 40); save(); renderTrading(); } } }, 'Rename'),
+        h('button', { class: 'btn ghost', onclick: async () => {
+          if (!(await askConfirm('Reset account', `Close everything in "${acc.name}" and start again with ${fmtMoney(+bal.value || acc.start)}? Positions, orders, history and journal are cleared.`, 'Reset'))) return;
+          const fresh = PT.newAccount(acc.name, Math.max(100, +bal.value || acc.start));
+          Object.assign(fresh, { id: acc.id, commission: acc.commission, leverage: acc.leverage });
+          for (const k of Object.keys(acc)) delete acc[k];
+          Object.assign(acc, fresh);
+          save(); paperWatchSyms(); paperRefresh();
+        } }, 'Reset with this balance'),
+        state.paper.accounts.length < 5 ? h('button', { class: 'btn ghost', onclick: async () => {
+          const n = await askText('New paper account', `Account ${state.paper.accounts.length + 1}`);
+          if (!n) return;
+          const a = PT.newAccount(n.slice(0, 40), 100000);
+          a.leverage = 1;
+          state.paper.accounts.push(a);
+          state.paper.active = state.paper.accounts.length - 1;
+          save(); paperWatchSyms(); paperRefresh();
+        } }, 'New account') : null,
+        state.paper.accounts.length > 1 ? h('button', { class: 'btn ghost danger-text', onclick: async () => {
+          if (!(await askConfirm('Delete account', `Delete "${acc.name}" with all its trades and journal?`, 'Delete'))) return;
+          state.paper.accounts.splice(state.paper.active, 1);
+          state.paper.active = 0;
+          save(); paperWatchSyms(); paperRefresh();
+        } }, 'Delete account') : null,
+      ];
+      body.append(h('div', { class: 'tt-props form' },
+        acc.replay ? h('p', { class: 'muted' }, 'This chart is replaying, so it trades on a practice account that only exists until the replay ends. Then you get a summary of the replay\'s trades.') : null,
+        row('Starting balance', bal, acc.replay ? '' : 'Used by Reset'),
+        row('Commission', comm, '% of each fill'),
+        row('Leverage', lev, 'Positions can be worth up to equity × leverage'),
+        h('label', {}, h('span', {}, 'Lines on charts'), h('span', { class: 'tt-in' }, showLines), h('small', { class: 'muted tt-help' }, 'Positions, orders, stop loss and take profit')),
+        h('div', { class: 'pt-acts-row' }, acts),
+        h('p', { class: 'muted' }, 'Paper trading uses virtual money and Candela\'s own prices: market orders fill at the last price, limit and stop orders when a price update reaches them. Real fills can differ (spread, slippage, liquidity). Orders only fill while Candela is open.')));
+    }
+    const b2 = box.querySelector('.tt-body');
+    if (b2) b2.scrollTop = keepScroll;
+  }
+
+  // the results of a replay's practice trades, shown when the replay ends
+  function replayResults(slot, acc, px) {
+    if (!acc || !acc.history.length) return;
+    const prices = {};
+    for (const s of Object.keys(acc.positions)) prices[s] = px;
+    const eq = PT.equity(acc, prices), sm = PT.summary(acc), c = slot.chart;
+    const cls = (v) => (v > 0 ? 'up' : v < 0 ? 'down' : '');
+    const cell = (label, v, k = '') => h('div', { class: 'tt-stat' }, h('span', { class: 'muted' }, label), h('b', { class: k }, v));
+    const body = h('div', {},
+      h('div', { class: 'tt-stats pt-results' },
+        cell('Result', (eq.equity - acc.start > 0 ? '+' : '') + fmtMoney(eq.equity - acc.start), cls(eq.equity - acc.start)),
+        cell('Return', pctTxt(((eq.equity - acc.start) / acc.start) * 100), cls(eq.equity - acc.start)),
+        cell('Closed trades', String(sm.trades)), cell('Win rate', sm.trades ? sm.winRate.toFixed(1) + '%' : '–'),
+        cell('Fees', fmtMoney(eq.fees)), cell('Still open', Object.keys(acc.positions).length ? `${fmtMoney(eq.unrealized)} unrealized` : 'Nothing', cls(eq.unrealized))),
+      h('div', { class: 'tt-table-wrap pt-results-list' }, h('table', { class: 'tt-table' },
+        h('thead', {}, h('tr', {}, ['Candle', 'Side', 'Quantity', 'Price', 'Realized P&L', 'Reason'].map((x) => h('th', {}, x)))),
+        h('tbody', {}, acc.history.map((f) => h('tr', {}, h('td', {}, c.fmtTimeFull(f.t)), h('td', { class: f.side === 'buy' ? 'long' : 'short' }, f.side === 'buy' ? 'Buy' : 'Sell'),
+          h('td', {}, fmtQty(f.qty)), h('td', {}, c.fmtPrice(f.price)), h('td', { class: cls(f.realized) }, f.realized ? fmtMoney(f.realized) : ''), h('td', {}, f.reason)))))));
+    const journal = h('button', { class: 'btn ghost', onclick: () => {
+      const a = paperMain();
+      a.notes.push({ id: Math.random().toString(36).slice(2, 10), t: Date.now(), sym: slot.symbol,
+        text: `Replay ${bare(slot.symbol)} ${tfName(slot.tf)}: ${sm.trades} closed trades, win rate ${sm.trades ? sm.winRate.toFixed(0) + '%' : '–'}, result ${fmtMoney(eq.equity - acc.start)} (${pctTxt(((eq.equity - acc.start) / acc.start) * 100)}).` });
+      save();
+      m.close();
+      toast('Saved to the journal of ' + a.name, 'info', 2000);
+      paperRefresh();
+    } }, 'Save summary to journal');
+    const m = openModal(`Replay results · ${bare(slot.symbol)} ${tfName(slot.tf)}`, body, { wide: true, footer: [journal, h('span', { class: 'spacer' }), h('button', { class: 'btn primary', onclick: () => m.close() }, 'Done')] });
+  }
+  // a replay candle: fill the replay account's orders and brackets on it
+  function paperReplayBar(slot) {
+    const R = slot.replay;
+    if (!R || !R.paper) return;
+    const fills = PT.onBar(R.paper, slot.symbol, R.full[R.idx]).filter(Boolean);
+    if (fills.length) paperFilled(R.paper, fills, false);
+    else paperRefreshSoon();
+  }
+
   // ---- Strategy Tester: backtests a strategy script on the active chart's candles
   const BT = window.CandelaBacktest;
   const tester = { slot: null, scriptId: null, result: null, timer: null, error: null };
@@ -3285,6 +3735,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   const pctTxt = (v) => (isFinite(v) ? `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}%` : '–');
 
   function openTester() {
+    if (state.paper.open) closeTrading();
     state.tester.open = true;
     save();
     $('#tester').classList.remove('hidden');
@@ -3297,7 +3748,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     state.tester.open = false;
     save();
     $('#tester').classList.add('hidden');
-    $('.chart-wrap').classList.remove('with-tester');
+    if (!state.paper.open) $('.chart-wrap').classList.remove('with-tester');
     for (const s of slots) s.chart.setTrades(null);
     updateHeader();
   }
@@ -3881,6 +4332,17 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       item('Remove alert', () => deleteAlert(a), 'danger');
       menu.appendChild(h('div', { class: 'ctx-sep' }));
     }
+    if (info.tradeLine) {
+      const l = info.tradeLine, acc = paperAccFor(slot);
+      menu.appendChild(h('div', { class: 'ctx-label' }, l.label));
+      if (l.kind === 'pos') {
+        item('Close position', () => paperClose(acc, slot.symbol), 'danger');
+        item('Take profit / stop loss…', () => editBrackets(slot, slot.symbol, acc));
+      } else if (l.kind === 'order') item('Cancel order', () => paperCancel(acc, l.id), 'danger');
+      else item(l.kind === 'sl' || l.kind === 'osl' ? 'Remove stop loss' : 'Remove take profit', () => paperRemoveBracket(slot, l), 'danger');
+      if (l.drag) menu.appendChild(h('div', { class: 'ctx-label muted' }, 'Drag the line to move it'));
+      menu.appendChild(h('div', { class: 'ctx-sep' }));
+    }
     if (info.drawing) {
       item('Delete drawing', () => chart.deleteSelected(), 'danger');
       menu.appendChild(h('div', { class: 'ctx-sep' }));
@@ -3888,6 +4350,15 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (info.price != null) {
       const p = chart.fmtPrice(info.price);
       item(`Add alert at ${p}`, () => addAlert(slot.symbol, +p));
+      if (!slot.symbol.startsWith('CSV:')) {
+        // buy below the price = limit, above = stop (and the reverse for selling)
+        const last = paperPrice(paperAccFor(slot), slot.symbol) ?? chart.raw[chart.raw.length - 1]?.c;
+        if (last) {
+          const bt = +p < last ? 'limit' : 'stop', st = +p > last ? 'limit' : 'stop';
+          item(`Buy ${bt} at ${p}…`, () => openOrderTicket(slot, { side: 'buy', type: bt, price: +p }));
+          item(`Sell ${st} at ${p}…`, () => openOrderTicket(slot, { side: 'sell', type: st, price: +p }));
+        }
+      }
       item(`Horizontal line at ${p}`, () => {
         const d = { id: Math.random().toString(36).slice(2), type: 'hline', pts: [{ t: chart.bars[chart.bars.length - 1]?.t || 0, p: +p }], width: 1.5 };
         chart.drawings.push(d);
@@ -4001,10 +4472,13 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   renderWatchlist();
   refreshAlerts();
   updateHeader();
+  paperSymsKey = paperSyms().sort().join(',');
   startTickers();
   syncMarkerFeeds();
   probeServer();
   if (state.tester.open) openTester();
+  else if (state.paper.open) openTrading();
+  refreshTradeLines();
   buildRangeBar();
   renderObjTree();
   updateUndoButtons();

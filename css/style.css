@@ -647,3 +647,48 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 /* ---- right-click menus: a heading line, red text buttons */
 .ctx-label { padding: 6px 12px 4px; font-size: 11px; font-weight: 700; color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .btn.danger-text { color: var(--down); }
+
+/* ---- Paper trading */
+.pt-head { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.pt-stat { display: inline-flex; flex-direction: column; line-height: 1.15; flex: none; }
+.pt-stat small { font-size: 10px; }
+.pt-stat b { font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pt-stat .up, .pt-table .up, .pt-results .up, .pt-jstats .up { color: var(--up); }
+.pt-stat .down, .pt-table .down, .pt-results .down, .pt-jstats .down { color: var(--down); }
+.pt-acc.replay { font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.pt-head .spacer { flex: 1; }
+.pt-head .btn { flex: none; }
+.btn.pt-buy, .pt-submit.buy { background: #3b6ff5; border-color: #3b6ff5; color: #fff; }
+.btn.pt-sell, .pt-submit.sell { background: #e2781f; border-color: #e2781f; color: #fff; }
+.btn.pt-buy:hover, .btn.pt-sell:hover, .pt-submit:hover { filter: brightness(1.1); }
+.pt-table td.pt-acts { text-align: right; display: flex; gap: 4px; justify-content: flex-end; }
+.pt-table tbody tr { cursor: default; }
+.pt-note { width: 220px; height: 24px; border: 1px solid transparent; background: transparent; color: var(--text); border-radius: 4px; padding: 0 6px; font: inherit; }
+.pt-note:hover, .pt-note:focus { border-color: var(--border); background: var(--bg); }
+.btn.small { height: 24px; padding: 0 8px; font-size: 12px; }
+.pt-ticket { min-width: 360px; }
+.pt-ticket label.hidden { display: none; }
+.pt-ctl { display: inline-flex; align-items: center; gap: 8px; }
+.pt-ctl input[type=number] { width: 150px; }
+.pt-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 4px; }
+.pt-side { height: 34px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); font: inherit; font-weight: 700; border-radius: 6px; cursor: pointer; }
+.pt-side.buy.on { background: #3b6ff5; border-color: #3b6ff5; color: #fff; }
+.pt-side.sell.on { background: #e2781f; border-color: #e2781f; color: #fff; }
+.pt-pctrow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.pt-pcts { display: inline-flex; gap: 4px; }
+.pt-info { font-size: 12px; margin: 4px 0 0; }
+.pt-err { color: var(--down); font-size: 12px; margin: 0; min-height: 0; }
+.pt-err:empty { display: none; }
+.pt-journal { display: flex; height: 100%; min-height: 0; }
+.pt-jstats { grid-template-columns: repeat(2, minmax(110px, 1fr)); width: 300px; }
+.pt-jcol { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 10px 14px; gap: 10px; overflow: auto; }
+.pt-jadd { display: flex; gap: 8px; align-items: flex-start; }
+.pt-jtext { flex: 1; resize: vertical; min-height: 54px; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; padding: 6px 8px; font: inherit; }
+.pt-jitem { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; white-space: pre-wrap; }
+.pt-jmeta { font-size: 11px; display: flex; justify-content: space-between; align-items: center; }
+.pt-jlist { display: flex; flex-direction: column; gap: 6px; }
+.pt-acts-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.pt-results { width: auto; grid-template-columns: repeat(3, minmax(120px, 1fr)); padding: 0 0 12px; }
+.pt-results-list { max-height: 260px; }
+.ctx-label.muted { font-weight: 400; font-size: 11px; }
+@media (max-width: 1700px) { #tradeBtn span { display: none; } }

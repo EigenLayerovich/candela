@@ -55,6 +55,9 @@
     <button id="testerBtn" class="hbtn" title="Strategy Tester: backtest a strategy script">
       <svg viewBox="0 0 24 24"><path d="M4 19h16M6 16l4-5 3 3 5-7"/><circle cx="18" cy="7" r="1.6"/></svg><span>Strategy</span>
     </button>
+    <button id="tradeBtn" class="hbtn" title="Paper trading: practice with virtual money">
+      <svg viewBox="0 0 24 24"><path d="M7 4v16M17 4v16"/><rect x="4.5" y="7" width="5" height="8" rx="1"/><rect x="14.5" y="9" width="5" height="6" rx="1"/></svg><span>Trade</span>
+    </button>
     <div class="spacer"></div>
     <button id="pctBtn" class="hbtn small" title="Percent scale">%</button>
     <button id="logBtn" class="hbtn small" title="Logarithmic price scale">log</button>
@@ -86,6 +89,7 @@
       <div id="charts" class="charts" data-layout="1"></div>
       <div id="rangeBar" class="range-bar" role="toolbar" aria-label="Date range"></div>
       <section id="tester" class="tester hidden" aria-label="Strategy Tester"></section>
+      <section id="trading" class="tester hidden" aria-label="Paper trading"></section>
     </section>
     <aside id="side" class="side">
       <div class="side-sec grow">
@@ -118,6 +122,7 @@
   <script src="js/script.js"></script>
   <script src="js/alerts-core.js"></script>
   <script src="js/backtest.js"></script>
+  <script src="js/paper.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

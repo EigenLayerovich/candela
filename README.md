@@ -284,6 +284,8 @@ is meant for personal use.
     legend row or the Alert dialog. Each alert watches its own symbol and timeframe with the settings
     it was created with, even if the chart shows something else, and only new markers fire (not ones
     already on the chart).
+- **Paper trading** with virtual money: market, limit and stop orders, take profit and stop loss as
+  draggable lines on the chart, a trade journal, and trading during Bar Replay; see below.
 - **Watchlist** with live prices and 24h change.
 - **CSV import** for anything else: Date, Open, High, Low, Close, Volume (Yahoo Finance-style exports
   work).
@@ -347,6 +349,34 @@ that candle disappears; the controls at the bottom play the candles back (0.5 to
 candle at a time (or `Shift+→`), or pick a new start. Indicators, drawings and the Strategy Tester follow the
 replay, and indicators set to another timeframe only see the past. Alerts don't fire during a replay.
 **Exit replay** returns to live data.
+
+## Paper trading
+
+Practise trading with virtual money. Click **Trade** (top bar) to open the trading panel under the charts.
+Each paper account starts with $100,000 (up to 5 accounts; rename, reset with any balance, or delete them in
+the *Account* tab).
+
+- **Orders**: *Buy* / *Sell* in the panel opens an order ticket: market, limit or stop, a quantity or an
+  amount in dollars (or 10/25/50/100% of equity), and an optional take profit and stop loss. Right-click the
+  chart at a price for *Buy limit / stop at …* and *Sell limit / stop at …* (a limit below the price buys
+  cheaper, a stop above it buys on a breakout; the reverse for selling).
+- **On the chart**: your position (with its open P&L), waiting orders, stop loss and take profit are lines
+  with labels. Drag an order, stop loss or take profit line to move it; right-click a line to cancel the
+  order, close the position or remove the stop.
+- **Panel tabs**: *Positions* (close, edit TP/SL), *Orders* (cancel), *History* (every fill, with a note
+  field for each), *Journal* (win rate, profit factor, best and worst trade, fees, and your own journal
+  entries), *Account* (commission, leverage, starting balance, lines on/off).
+- **Fills**: market orders fill at the last price; limit and stop orders, stops and targets fill when a price
+  update reaches them (from the charts, the watchlist or alert feeds; Candela follows the symbols you have
+  positions or orders in by itself). Commission defaults to 0.05% per fill. Leverage 1 means positions can be
+  worth up to your equity; raise it in the Account tab. Buying while short reduces the short first.
+- **In Bar Replay** the replaying chart trades on its own practice account (shown as *Replay practice*):
+  orders, stops and targets fill candle by candle (at the order's price, or at the open if the candle gaps
+  past it; a stop counts before a target in the same candle). When the replay ends you get the results:
+  return, win rate, every fill, and a button to save the summary to your journal.
+
+Everything is saved in the browser (or the Windows app). It is practice only: real fills differ (spread,
+slippage, liquidity), and orders only fill while Candela is open.
 
 ## Strategy Tester (backtesting)
 
@@ -458,6 +488,8 @@ new version over the old one (quit Candela from the tray first); your charts and
 | Move a price alert | drag its dashed line up or down |
 | Edit or remove an alert | right-click its line on the chart, or the alert in the Alerts list |
 | Alert | `Alt+A`, or right-click the chart → *Add alert at …* |
+| Paper order at a price | right-click the chart → *Buy limit / stop at …* or *Sell …* |
+| Move a paper order, stop loss or take profit | drag its line on the chart |
 | Delete drawing | select it, then `Del` |
 | Focus chart N in a layout | `Alt+1` … `Alt+6` |
 | Cancel | `Esc` |
@@ -532,6 +564,7 @@ It shows up in the Indicators dialog automatically, with a settings panel genera
 - `js/script.js`: Candela Script: lexer, parser, checker, interpreter, built-in functions
 - `js/alerts-core.js`: alert rules shared by the browser and the server
 - `js/backtest.js`: the Strategy Tester's backtest engine
+- `js/paper.js`: paper trading: accounts, orders, fills, P&L
 - `js/data.js`: Binance REST/WebSocket, Twelve Data, demo feed, CSV parser
 - `js/exchanges.js`: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex, Binance and
   Bybit futures, and building missing timeframes

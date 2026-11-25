@@ -11,7 +11,13 @@
     if (md && md.isBStock && md.isBStock(sym)) return sym.replace(/USDT$/, '');
     return sym.replace(/^(CSV|TD):/, '').replace(/@.*$/, '');
   };
+  // Kinds: price (no kind: price crossing a level), 'marker' (a script's marker), 'cond' (price or an
+  // indicator against a value or another indicator), 'line' (price crossing a drawn line).
   const isMarker = (a) => a.kind === 'marker';
+  const isCond = (a) => a.kind === 'cond';
+  const isLine = (a) => a.kind === 'line';
+  const isBar = (a) => isMarker(a) || isCond(a); // checked on candles
+  const isTick = (a) => !a.kind || isLine(a); // checked on every price update
   // Live exchange symbols only: simulated (DEMO…) and imported CSV data exist only in the browser.
   const serverEligible = (a) => !/^DEMO\d*$/.test(a.symbol) && !a.symbol.startsWith('CSV:');
 
@@ -61,16 +67,101 @@
 
   const markerTitle = (a) => `${bare(a.symbol)} ${TF_LABEL(a.tf)} · ${a.scriptName}: ${a.markName}`;
 
+  // dir: 'up' (rising through the level), 'down', or either
   function priceCrossed(a, prev, cur) {
-    return prev != null && prev !== cur && ((prev < a.price && cur >= a.price) || (prev > a.price && cur <= a.price));
+    if (prev == null || prev === cur) return false;
+    const up = prev < a.price && cur >= a.price, down = prev > a.price && cur <= a.price;
+    return a.dir === 'up' ? up : a.dir === 'down' ? down : up || down;
+  }
+  // a candle went through the level (stock prices are checked once a minute, on 1-minute candles)
+  function priceTouched(a, prev, bar) {
+    if (prev == null) return false;
+    const up = prev < a.price && bar.h >= a.price, down = prev > a.price && bar.l <= a.price;
+    return a.dir === 'up' ? up : a.dir === 'down' ? down : up || down;
   }
   function applyPriceFire(a, cur, now = Date.now()) {
     a.active = false;
     a.triggeredAt = now;
     a.fires = (a.fires || 0) + 1;
     a.lastFired = now;
-    return `🔔 ${bare(a.symbol)} crossed ${fmt(a.price)} (now ${fmt(cur)})`;
+    const how = a.dir === 'up' ? 'crossed up through' : a.dir === 'down' ? 'crossed down through' : 'crossed';
+    return `🔔 ${bare(a.symbol)} ${how} ${fmt(a.price)} (now ${fmt(cur)})`;
   }
 
-  root.CandelaAlerts = { isMarker, serverEligible, evaluateMarker, applyMarkerFire, markerTitle, priceCrossed, applyPriceFire, findMarker, TF_LABEL };
+  // ---- drawn lines: lines = [{ pts: [{ t, p }, { t, p }], ext: 'segment' | 'ray' | 'extended' }]
+  function lineAt(l, t) {
+    const [p, q] = l.pts;
+    if (!p || !q || q.t === p.t) return null;
+    if (l.ext === 'segment' && (t < Math.min(p.t, q.t) || t > Math.max(p.t, q.t))) return null;
+    if (l.ext === 'ray' && (q.t > p.t ? t < p.t : t > p.t)) return null;
+    return p.p + ((q.p - p.p) * (t - p.t)) / (q.t - p.t);
+  }
+  // { up, value } when the price went through one of the lines between two updates, else null
+  function lineCrossed(a, prev, prevT, cur, curT, now = Date.now()) {
+    if (prev == null || prevT == null) return null;
+    if (a.repeat === 'every' && a.lastFired && now - a.lastFired < 60e3) return null; // at most once a minute
+    for (const l of a.lines || []) {
+      const v0 = lineAt(l, prevT), v1 = lineAt(l, curT);
+      if (v0 == null || v1 == null) continue;
+      const up = prev < v0 && cur >= v1, down = prev > v0 && cur <= v1;
+      if (a.dir === 'up' ? up : a.dir === 'down' ? down : up || down) return { up, value: v1 };
+    }
+    return null;
+  }
+  function applyLineFire(a, cur, res, now = Date.now()) {
+    a.fires = (a.fires || 0) + 1;
+    a.lastFired = now;
+    if (a.repeat !== 'every') { a.active = false; a.triggeredAt = now; }
+    return `🔔 ${bare(a.symbol)} crossed ${res.up ? 'above' : 'below'} the ${a.name || 'line'} at ${fmt(res.value)} (now ${fmt(cur)})`;
+  }
+  const lineTitle = (a) => `${bare(a.symbol)} crossing${a.dir === 'up' ? ' up through' : a.dir === 'down' ? ' down through' : ''} ${a.name || 'line'}`;
+
+  // ---- conditions: left / right = { src: 'price' } | { src: 'value', value } | { src: 'ind', type, params, key, label }
+  const OPS = { cross: 'crossing', crossup: 'crossing up', crossdown: 'crossing down', gt: 'greater than', lt: 'less than' };
+  const sideLabel = (s) => (s.src === 'price' ? 'Price' : s.src === 'value' ? (Number.isInteger(s.value) ? String(s.value) : fmt(s.value)) : s.label);
+  const condTitle = (a) => `${bare(a.symbol)} ${TF_LABEL(a.tf)} · ${sideLabel(a.left)} ${OPS[a.op] || a.op} ${sideLabel(a.right)}`;
+  function seriesOf(side, bars, resolve, defaults) {
+    if (side.src === 'price') return bars.map((b) => b.c);
+    if (side.src === 'value') return bars.map(() => side.value);
+    const def = resolve(side.type);
+    if (!def) throw new Error(side.type.startsWith('script:') ? 'The script was deleted' : 'Unknown indicator');
+    const arr = (def.calc(bars, { ...defaults(def), ...side.params }) || {})[side.key];
+    if (!arr) throw new Error(`"${side.label}" is no longer part of this indicator`);
+    return arr;
+  }
+  function condHit(op, l0, r0, l1, r1) {
+    if (![l1, r1].every(Number.isFinite)) return false;
+    if (op === 'gt') return l1 > r1;
+    if (op === 'lt') return l1 < r1;
+    if (![l0, r0].every(Number.isFinite)) return false;
+    const up = l0 <= r0 && l1 > r1, down = l0 >= r0 && l1 < r1;
+    return op === 'crossup' ? up : op === 'crossdown' ? down : up || down;
+  }
+  // Like evaluateMarker. resolve(type) gives the indicator definition (built-in or script).
+  function evaluateCondition(a, bars, prime, resolve, defaults) {
+    if (!a.active) return { type: 'ok' };
+    const n = bars.length, i = a.when === 'close' ? n - 2 : n - 1;
+    if (i < 1) return { type: 'ok' };
+    let L, R;
+    try { L = seriesOf(a.left, bars, resolve, defaults); R = seriesOf(a.right, bars, resolve, defaults); } catch (e) { return { type: 'pause', reason: e.message }; }
+    const hit = condHit(a.op, L[i - 1], R[i - 1], L[i], R[i]), t = bars[i].t;
+    if (prime) return hit && a.lastBarT !== t ? { type: 'prime', t } : { type: 'ok' };
+    if (!hit || a.lastBarT === t) return { type: 'ok' };
+    return { type: 'fire', t, price: bars[i].c, value: L[i] };
+  }
+  function applyCondFire(a, res, now = Date.now()) {
+    a.lastBarT = res.t;
+    a.fires = (a.fires || 0) + 1;
+    a.lastFired = now;
+    if (a.repeat === 'once') { a.active = false; a.triggeredAt = now; }
+    const d = new Date(res.t), daily = /[dwM]$/.test(a.tf);
+    const bar = daily ? d.toISOString().slice(0, 10) : d.toISOString().slice(11, 16) + ' UTC';
+    const val = a.left.src === 'ind' ? `, ${a.left.label} ${fmt(res.value)}` : '';
+    return `🔔 ${condTitle(a)} · ${a.when === 'close' ? `${bar} bar closed` : 'now'} (price ${fmt(res.price)}${val})`;
+  }
+
+  root.CandelaAlerts = {
+    isMarker, isCond, isLine, isBar, isTick, serverEligible, evaluateMarker, applyMarkerFire, markerTitle, priceCrossed, priceTouched, applyPriceFire, findMarker, TF_LABEL,
+    lineAt, lineCrossed, applyLineFire, lineTitle, OPS, condTitle, evaluateCondition, applyCondFire, fmt,
+  };
 })(typeof window !== 'undefined' ? window : globalThis);

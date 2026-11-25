@@ -147,7 +147,7 @@ KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex** spot markets: public
   Gate.io no 2H or weekly; HTX's daily candles start at 16:00 UTC, so its days and weeks are built too), Candela builds it from smaller candles. Weeks start on Monday on every exchange.
 - **Live updates**: WebSocket on Bybit, OKX, Bitget, Gate.io, HTX, Kraken and Bitfinex; Coinbase builds the current candle from live trades;
   KuCoin and MEXC refresh every 3–4 seconds.
-- **Alerts** (price and script markers) work on every exchange, in the browser and on the alert server.
+- **Alerts** (price, conditions, drawn lines and script markers) work on every exchange, in the browser and on the alert server.
 
 Things to know:
 
@@ -263,7 +263,14 @@ is meant for personal use.
   see *Drawing tools* below.
 - **Alerts** with sound, on-screen and desktop notifications, and with the included server also when
   the browser is closed, via phone push (ntfy), Telegram or Discord/Slack webhooks:
-  - *Price crossing* a level, for any symbol.
+  - *Price crossing* a level (either way, or only up / only down), for any symbol.
+  - *Conditions* (Alert dialog, or the bell on any indicator's legend row): the price or any indicator line
+    *crossing*, *crossing up*, *crossing down*, *greater than* or *less than* a value or another line. For
+    example RSI crossing up 30, EMA 20 crossing EMA 50, price greater than SMA 200, MACD crossing its
+    signal. Checked when the bar closes or as soon as it happens, every time (once per bar) or only once.
+    Indicators set to another timeframe are calculated on the alert's timeframe.
+  - *Drawn lines*: select a trend line, ray, extended line or parallel channel and click **Alert** in its
+    toolbar: fires when the price crosses the line (or only up / only down). Moving the line moves the alert.
   - *Script markers*: fire when a custom script's `mark` appears, either when the bar closes (no false
     alarms) or as soon as it appears, every time or only once. Create one from the bell on the script's
     legend row or the Alert dialog. Each alert watches its own symbol and timeframe with the settings

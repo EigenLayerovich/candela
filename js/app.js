@@ -796,6 +796,7 @@
       const lock = h('button', { class: 'db-btn' + (d.locked ? ' active' : ''), title: 'Lock position' }, d.locked ? 'Locked' : 'Lock');
       lock.addEventListener('click', () => { d.locked = !d.locked; lock.classList.toggle('active', d.locked); lock.textContent = d.locked ? 'Locked' : 'Lock'; changed(); });
       const kids = [color, width, dash, lock];
+      if (LINE_ALERT[d.type]) kids.push(h('button', { class: 'db-btn', title: 'Alert when the price crosses this line', onclick: () => openLineAlertDialog(this, d) }, 'Alert'));
       if (['hline', 'hray', 'crossline'].includes(d.type)) kids.push(h('button', { class: 'db-btn', title: 'Create a price alert at this line', onclick: () => addAlert(this.symbol, d.pts[0].p) }, 'Alert'));
       if (d.type === 'arrowup' || d.type === 'arrowdown') kids.push(h('button', { class: 'db-btn', onclick: async () => { const t = await askText('Label', d.text || '', 'Optional text'); if (t !== null && t !== undefined) { d.text = t; changed(); } } }, d.text ? 'Edit text' : 'Add text'));
       if (d.type === 'text') kids.push(h('button', { class: 'db-btn', onclick: async () => { const t = await askText('Text note', d.text); if (t) { d.text = t; changed(); } } }, 'Edit'));
@@ -811,6 +812,7 @@
   // Drawings belong to a symbol, so every chart showing that symbol shows the same drawings.
   function drawingsChanged(src) {
     state.drawings[src.symbol] = src.chart.drawings;
+    updateLineAlerts(src.symbol, src.chart.drawings);
     for (const s of slots) {
       if (s !== src && s.symbol === src.symbol) { s.chart.drawings = src.chart.drawings; s.chart.invalidate(); }
     }
@@ -2760,17 +2762,21 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   // Two kinds: price alerts ({ symbol, price }) and marker alerts on a script indicator
   // ({ kind: 'marker', symbol, tf, scriptId, markKey, markName, params, when, repeat }).
   const isMarkerAlert = (a) => a.kind === 'marker';
-  const priceAlerts = () => state.alerts.filter((a) => !isMarkerAlert(a));
-
-  function alertTitle(a) {
-    return isMarkerAlert(a)
-      ? `${symLabel(a.symbol)} ${tfName(a.tf)} · ${a.scriptName}: ${a.markName}`
-      : `${symLabel(a.symbol)} crossing ${a.price.toFixed(decimalsFor(a.price))}`;
+  // alerts checked on every price update: price levels and drawn lines (the others are checked on candles)
+  const priceAlerts = () => state.alerts.filter((a) => AL.isTick(a));
+  const dirWord = (a) => (a.dir === 'up' ? ' up through' : a.dir === 'down' ? ' down through' : '');
+  // what an alert watches, after the symbol
+  function alertText(a) {
+    if (AL.isMarker(a)) return ` ${tfName(a.tf)} · ${a.scriptName}: ${a.markName}`;
+    if (AL.isCond(a)) return ` ${tfName(a.tf)} · ${AL.condTitle(a).split(' · ').slice(1).join(' · ')}`;
+    if (AL.isLine(a)) return ` crossing${dirWord(a)} ${a.name || 'line'}`;
+    return ` crossing${dirWord(a)} ${a.price.toFixed(decimalsFor(a.price))}`;
   }
 
+  function alertTitle(a) { return symLabel(a.symbol) + alertText(a); }
   function refreshAlerts() {
     for (const s of slots) {
-      s.chart.alerts = priceAlerts().filter((a) => a.active && a.symbol === s.symbol);
+      s.chart.alerts = state.alerts.filter((a) => !a.kind && a.active && a.symbol === s.symbol); // level lines on the chart
       s.chart.invalidate();
     }
     renderServerStatus();
@@ -2779,21 +2785,22 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (!state.alerts.length) { box.appendChild(h('div', { class: 'empty' }, 'No alerts. Right-click a chart, press Alt+A, or use the bell on a script with markers.')); return; }
     for (const a of [...state.alerts].reverse()) {
       let stateText = a.active ? 'active' : 'triggered';
-      if (isMarkerAlert(a)) {
+      if (AL.isBar(a) || AL.isLine(a)) {
         if (a.paused) stateText = 'paused';
         else if (a.active) stateText = a.fires ? `active · fired ${a.fires}×` : 'active';
       }
       if (a.active && !a.paused && srv.connected && !a.server) stateText += ' · this tab only';
-      const tip = isMarkerAlert(a)
-        ? `${a.when === 'close' ? 'Fires when a bar closes with this marker' : 'Fires as soon as this marker appears'}, ${a.repeat === 'once' ? 'once' : 'every time'}.` +
+      const tip = AL.isBar(a)
+        ? `${a.when === 'close' ? `Fires when a bar closes with ${AL.isMarker(a) ? 'this marker' : 'this condition true'}` : `Fires as soon as ${AL.isMarker(a) ? 'this marker appears' : 'this condition is true'}`}, ${a.repeat === 'once' ? 'once' : 'every time (once per bar)'}.` +
           (a.lastFired ? `\nLast fired ${new Date(a.lastFired).toLocaleString()}.` : '') + (a.paused ? `\nPaused: ${a.paused}` : '')
-        : 'Fires once when the price crosses this level.';
+        : AL.isLine(a) ? `Fires when the price crosses the ${a.name}${a.repeat === 'every' ? ', every time (at most once a minute)' : ', once'}.`
+          : 'Fires once when the price crosses this level.';
       const where = !a.active ? '' : a.server && srv.connected ? '\nRuns on the alert server, even with the browser closed.'
         : srv.connected ? '\nRuns only while this tab is open (simulated and CSV data stay in the browser).' : '\nRuns while this page is open.';
-      const row = h('div', { class: 'al-row' + (a.active && !a.paused ? '' : ' done') + (isMarkerAlert(a) ? ' marker' : ''), title: tip + where, onclick: () => showAlertOnChart(a) },
+      const row = h('div', { class: 'al-row' + (a.active && !a.paused ? '' : ' done') + (AL.isBar(a) ? ' marker' : ''), title: tip + where, onclick: () => showAlertOnChart(a) },
         h('span', { class: 'al-dot' }),
         h('span', { class: 'al-text' }, h('b', {}, symLabel(a.symbol)),
-          isMarkerAlert(a) ? ` ${tfName(a.tf)} · ${a.scriptName}: ${a.markName}` : ` crossing ${a.price.toFixed(decimalsFor(a.price))}`,
+          alertText(a),
           a.paused ? h('small', { class: 'al-why' }, a.paused) : null),
         h('span', { class: 'muted al-state' }, stateText),
         h('button', { class: 'wl-x', title: 'Delete alert', onclick: (e) => {
@@ -2805,9 +2812,9 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   }
 
   function showAlertOnChart(a) {
-    const match = slots.find((s) => s.symbol === a.symbol && (!isMarkerAlert(a) || s.tf === a.tf));
+    const match = slots.find((s) => s.symbol === a.symbol && (!AL.isBar(a) || s.tf === a.tf));
     if (match) { setActive(match); return; }
-    if (isMarkerAlert(a)) active.load(a.symbol, a.tf);
+    if (AL.isBar(a)) active.load(a.symbol, a.tf);
     else if (!slots.some((s) => s.symbol === a.symbol)) active.load(a.symbol);
   }
 
@@ -2816,13 +2823,14 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   }
 
-  function addAlert(symbol, price) {
+  function addAlert(symbol, price, dir) {
     if (!isFinite(price)) return;
     const a = { id: uid(), symbol, price: +price, active: true, created: Date.now() };
+    if (dir === 'up' || dir === 'down') a.dir = dir;
     if (lastPx[symbol] != null) a.refPrice = lastPx[symbol]; // lets the server spot a crossing before its first price check
     state.alerts.push(a);
     registerAlert(a);
-    toast(`Alert set: ${symLabel(symbol)} crossing ${(+price).toFixed(decimalsFor(price))}`, 'info');
+    toast(`Alert set: ${alertTitle(a)}`, 'info');
     askNotificationPermission();
   }
 
@@ -2843,73 +2851,165 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     askNotificationPermission();
   }
 
-  // preset: { ind, markKey } to open the dialog on a script's marker (from the legend bell)
-  function openAlertDialog(price, preset) {
-    const slot = active, chart = slot.chart;
-    const last = chart.raw[chart.raw.length - 1];
-    const p = price ?? (last ? last.c : 0);
-    const markers = chartMarkers(chart);
-    const cond = h('select', { id: 'alertCond' },
-      h('option', { value: 'price' }, 'Price crossing a level'),
-      markers.map((m, i) => h('option', { value: String(i) }, `${chart.indicatorLabel(m.ind)} · ${m.pl.name} marker`)));
-    if (preset) {
-      const i = markers.findIndex((m) => m.ind.id === preset.ind.id && (!preset.markKey || m.pl.key === preset.markKey));
-      if (i >= 0) cond.value = String(i);
+  // a condition alert: price or an indicator line against a value or another line, checked on candles
+  function addCondAlert(slot, left, op, right, when, repeat) {
+    const a = { id: uid(), kind: 'cond', symbol: slot.symbol, tf: slot.tf, left, op, right, when, repeat, active: true, fires: 0, created: Date.now() };
+    state.alerts.push(a);
+    if (slot.chart.raw.length) evaluateMarkerAlert(a, slot.chart.raw, true); // a condition already true on this bar doesn't fire for it
+    registerAlert(a);
+    toast(`Alert set: ${alertTitle(a)}`, 'info');
+    askNotificationPermission();
+  }
+  // what a condition can watch on this chart: the price, and every line of every indicator
+  function alertSources(chart) {
+    const out = [{ id: 'price', label: 'Price', spec: { src: 'price' } }];
+    for (const ind of chart.indicators) {
+      const lines = ind.def.plots.filter((pl) => pl.style !== 'mark');
+      const base = chart.indicatorLabel({ ...ind, tf: null });
+      for (const pl of lines) {
+        const label = lines.length > 1 ? `${base} · ${pl.name}` : base;
+        out.push({ id: `${ind.id}:${pl.key}`, ind, pl, label, spec: { src: 'ind', type: ind.def.id, params: { ...ind.params }, key: pl.key, label } });
+      }
     }
-    const priceInput = h('input', { type: 'number', step: 'any', id: 'alertPrice', value: (+p).toFixed(chart.decimals) });
+    return out;
+  }
+  // preset: { ind, markKey } to open the dialog on an indicator or a script's marker (from the legend bell)
+  function openAlertDialog(price, preset) {
+    const slot = active, chart = slot.chart, csv = slot.symbol.startsWith('CSV:');
+    const last = chart.raw[chart.raw.length - 1];
+    const markers = chartMarkers(chart), sources = alertSources(chart);
+    const left = h('select', { id: 'alertCond' },
+      sources.map((src) => h('option', { value: 's:' + src.id }, src.label)),
+      markers.length ? h('optgroup', { label: 'Script markers' }, markers.map((m, i) => h('option', { value: 'm:' + i }, `${chart.indicatorLabel(m.ind)} · ${m.pl.name} marker`))) : null);
+    if (preset) {
+      const mi = markers.findIndex((m) => m.ind.id === preset.ind.id && (!preset.markKey || m.pl.key === preset.markKey));
+      const si = sources.findIndex((x) => x.ind && x.ind.id === preset.ind.id);
+      if (preset.markKey && mi >= 0) left.value = 'm:' + mi;
+      else if (si >= 0) left.value = 's:' + sources[si].id;
+      else if (mi >= 0) left.value = 'm:' + mi;
+    }
+    const op = h('select', {}, Object.entries(AL.OPS).map(([k, label]) => h('option', { value: k }, label[0].toUpperCase() + label.slice(1))));
+    const right = h('select', {});
+    const valueIn = h('input', { type: 'number', step: 'any', id: 'alertPrice' });
     const radio = (name, value, label, hint, checked) => h('label', { class: 'radio' },
       h('input', { type: 'radio', name, value, checked }), h('span', {}, h('b', {}, label), hint ? h('small', {}, hint) : null));
     const whenBox = h('div', { class: 'radio-group' },
-      radio('alertWhen', 'close', 'When the bar closes', 'Only confirmed markers. No false alarms.', true),
-      radio('alertWhen', 'bar', 'As soon as it appears', 'Faster, but the marker can disappear before the bar closes.', false));
-    const repeatBox = h('div', { class: 'radio-group' },
-      radio('alertRepeat', 'every', 'Every time', null, true),
-      radio('alertRepeat', 'once', 'Only once', null, false));
-    const priceRow = h('label', {}, h('span', {}, 'Price'), priceInput);
-    const markerRows = h('div', { class: 'form' }, h('div', { class: 'form-block' }, h('span', {}, 'Trigger'), whenBox), h('div', { class: 'form-block' }, h('span', {}, 'Repeat'), repeatBox));
+      radio('alertWhen', 'close', 'When the bar closes', 'Confirmed only. No false alarms.', true),
+      radio('alertWhen', 'bar', 'As soon as it happens', 'Faster, but it can undo itself before the bar closes.', false));
+    const repeatBox = h('div', { class: 'radio-group' }, radio('alertRepeat', 'every', 'Every time', 'At most once per bar', true), radio('alertRepeat', 'once', 'Only once', null, false));
+    const opRow = h('label', {}, h('span', {}, ''), op);
+    const rightRow = h('label', {}, h('span', {}, 'Value'), h('span', { class: 'tf-pick' }, right, valueIn));
+    const barRows = h('div', { class: 'form' }, h('div', { class: 'form-block' }, h('span', {}, 'Trigger'), whenBox), h('div', { class: 'form-block' }, h('span', {}, 'Repeat'), repeatBox));
     const note = h('p', { class: 'muted' });
-    const csv = slot.symbol.startsWith('CSV:');
+    const leftSrc = () => sources.find((x) => 's:' + x.id === left.value);
+    // the latest value of a source, to prefill the level
+    const lastValue = (src) => {
+      if (!src || src.id === 'price') return last ? last.c : 0;
+      const arr = src.ind.out[src.pl.key];
+      for (let i = (arr ? arr.length : 0) - 1; i >= 0; i--) if (isFinite(arr[i])) return arr[i];
+      return 0;
+    };
+    let lastLeft = null;
     const sync = () => {
-      const isPrice = cond.value === 'price';
-      priceRow.hidden = !isPrice;
-      markerRows.hidden = isPrice;
-      note.textContent = isPrice
-        ? 'Fires once with a sound, an on-screen message and a desktop notification.'
-        : csv ? 'Imported CSV data never updates, so marker alerts can’t fire on it.'
-          : `Watches ${bare(slot.symbol)} on the ${tfName(slot.tf)} timeframe with this indicator’s current settings, even if you switch the chart to something else.` +
-            (isDemo(slot.symbol) ? ` Simulated data only updates while ${bare(slot.symbol)} ${tfName(slot.tf)} is on a chart.` : '');
-      note.textContent += ' Alerts run while this page is open.';
-      createBtn.disabled = !isPrice && csv;
+      const isMarker = left.value.startsWith('m:'), src = leftSrc();
+      opRow.hidden = isMarker;
+      rightRow.hidden = isMarker;
+      // the other side: a value, or the price / another line
+      if (!isMarker && lastLeft !== left.value) {
+        const keep = right.value;
+        right.innerHTML = '';
+        right.appendChild(h('option', { value: 'value' }, 'Value'));
+        for (const x of sources) if (x !== src) right.appendChild(h('option', { value: 's:' + x.id }, x.label));
+        right.value = [...right.options].some((o) => o.value === keep) ? keep : 'value';
+        const v = price != null && src && src.id === 'price' ? price : lastValue(src);
+        valueIn.value = (+v).toFixed(src && src.id !== 'price' ? 2 : chart.decimals);
+        lastLeft = left.value;
+      }
+      valueIn.hidden = right.value !== 'value';
+      const simplePrice = !isMarker && src && src.id === 'price' && right.value === 'value' && op.value.startsWith('cross');
+      barRows.hidden = simplePrice;
+      if (isMarker) note.textContent = csv ? 'Imported CSV data never updates, so this alert can’t fire on it.' : `Watches ${bare(slot.symbol)} on the ${tfName(slot.tf)} timeframe with this script's current settings, even if you switch the chart to something else.`;
+      else if (simplePrice) note.textContent = 'A price alert: checked on every price update, fires once.';
+      else {
+        const htf = [src, leftSrc && sources.find((x) => 's:' + x.id === right.value)].filter((x) => x && x.ind && x.ind.tf && x.ind.tf !== slot.tf);
+        note.textContent = `Checked on ${bare(slot.symbol)} ${tfName(slot.tf)} candles with the indicators' current settings.` +
+          (htf.length ? ` Note: ${htf.map((x) => x.label).join(', ')} is set to another timeframe on the chart; the alert calculates it on ${tfName(slot.tf)}.` : '');
+      }
+      if (isDemo(slot.symbol) && !simplePrice) note.textContent += ` Simulated data only updates while ${bare(slot.symbol)} ${tfName(slot.tf)} is on a chart.`;
+      note.textContent += srv.connected && !isDemo(slot.symbol) && !csv ? ' Runs on the alert server, even with the browser closed.' : ' Alerts run while this page is open.';
+      createBtn.disabled = csv && !simplePrice;
     };
     const body = h('div', { class: 'form' },
       h('label', {}, h('span', {}, 'Symbol'), h('b', {}, `${bare(slot.symbol)}${csv ? '' : ' · ' + tfName(slot.tf)}`)),
-      h('label', {}, h('span', {}, 'Condition'), cond),
-      markers.length ? null : h('p', { class: 'muted hint-line' }, 'Tip: add a custom script with mark lines to get marker alerts.'),
-      priceRow, markerRows, note);
+      h('label', {}, h('span', {}, 'Condition'), left), opRow, rightRow, barRows, note);
     const create = () => {
-      if (cond.value === 'price') addAlert(slot.symbol, +priceInput.value);
-      else {
-        const mk = markers[+cond.value];
-        const when = body.querySelector('input[name="alertWhen"]:checked').value, repeat = body.querySelector('input[name="alertRepeat"]:checked').value;
-        addMarkerAlert(slot, mk.ind, mk.pl, when, repeat);
-      }
+      const when = body.querySelector('input[name="alertWhen"]:checked').value, repeat = body.querySelector('input[name="alertRepeat"]:checked').value;
+      if (left.value.startsWith('m:')) { const mk = markers[+left.value.slice(2)]; addMarkerAlert(slot, mk.ind, mk.pl, when, repeat); m.close(); return; }
+      const src = leftSrc(), rightSpec = right.value === 'value' ? { src: 'value', value: +valueIn.value } : sources.find((x) => 's:' + x.id === right.value).spec;
+      if (rightSpec.src === 'value' && !isFinite(rightSpec.value)) { valueIn.focus(); return; }
+      if (src.id === 'price' && rightSpec.src === 'value' && op.value.startsWith('cross')) addAlert(slot.symbol, rightSpec.value, op.value === 'crossup' ? 'up' : op.value === 'crossdown' ? 'down' : null);
+      else addCondAlert(slot, src.spec, op.value, rightSpec, when, repeat);
       m.close();
     };
     const createBtn = h('button', { class: 'btn primary', onclick: create }, 'Create');
-    cond.addEventListener('change', sync);
-    priceInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') create(); });
+    for (const el of [left, op, right]) el.addEventListener('change', sync);
+    valueIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') create(); });
     const m = openModal('Create alert', body, { footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'), createBtn] });
     sync();
-    setTimeout(() => (cond.value === 'price' ? priceInput.select() : cond.focus()), 0);
+    setTimeout(() => (left.value === 's:price' ? valueIn.select() : left.focus()), 0);
   }
 
+  // ---- alerts on drawn lines: trend lines, rays, extended lines, parallel channels
+  const LINE_ALERT = { trend: ['segment', 'trend line'], infoline: ['segment', 'info line'], trendangle: ['segment', 'trend angle'], ray: ['ray', 'ray'], extended: ['extended', 'extended line'], parallel: ['segment', 'channel'] };
+  function linesOfDrawing(d) {
+    const [ext] = LINE_ALERT[d.type], [a, b] = d.pts, pt = (q) => ({ t: q.t, p: q.p });
+    if (d.type !== 'parallel' || !d.pts[2] || a.t === b.t) return [{ pts: [pt(a), pt(b)], ext }];
+    const c = d.pts[2], off = c.p - (a.p + ((b.p - a.p) * (c.t - a.t)) / (b.t - a.t)); // the channel's second line
+    return [{ pts: [pt(a), pt(b)], ext }, { pts: [{ t: a.t, p: a.p + off }, { t: b.t, p: b.p + off }], ext }];
+  }
+  function openLineAlertDialog(slot, d) {
+    const name = LINE_ALERT[d.type][1];
+    const dir = h('select', {}, h('option', { value: '' }, `Crosses the ${name}`), h('option', { value: 'up' }, `Crosses up through the ${name}`), h('option', { value: 'down' }, `Crosses down through the ${name}`));
+    const repeat = h('select', {}, h('option', { value: 'once' }, 'Only once'), h('option', { value: 'every' }, 'Every time (at most once a minute)'));
+    const m = openModal('Alert on this line', h('div', { class: 'form' },
+      h('label', {}, h('span', {}, 'When the price'), dir), h('label', {}, h('span', {}, 'Repeat'), repeat),
+      h('p', { class: 'muted' }, `Checked on every price update${d.type === 'ray' || d.type === 'extended' ? ', along the line as it continues to the right' : ' between the two ends of the line'}. Moving the line later moves the alert with it.`)), {
+      footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: () => {
+        const a = { id: uid(), kind: 'line', symbol: slot.symbol, lines: linesOfDrawing(d), name, drawingId: d.id, repeat: repeat.value, active: true, fires: 0, created: Date.now() };
+        if (dir.value) a.dir = dir.value;
+        if (lastPx[slot.symbol] != null) a.refPrice = lastPx[slot.symbol];
+        state.alerts.push(a);
+        registerAlert(a);
+        toast(`Alert set: ${alertTitle(a)}`, 'info');
+        askNotificationPermission();
+        m.close();
+      } }, 'Create')],
+    });
+  }
+  // a line with an alert was moved: move the alert too
+  function updateLineAlerts(symbol, drawings) {
+    for (const a of state.alerts) {
+      if (!AL.isLine(a) || a.symbol !== symbol || !a.drawingId || !a.active) continue;
+      const d = drawings.find((x) => x.id === a.drawingId);
+      if (!d || !LINE_ALERT[d.type]) continue;
+      const lines = linesOfDrawing(d);
+      if (JSON.stringify(lines) === JSON.stringify(a.lines)) continue;
+      a.lines = lines;
+      if (a.server && srv.connected) srvApi('DELETE', '/api/alerts/' + a.id).then(() => srvApi('POST', '/api/alerts', toServer(a))).catch(() => {});
+      save();
+    }
+  }
+
+  const lastPxT = {};
   function checkAlerts(sym, price) {
-    const prev = lastPx[sym];
+    const prev = lastPx[sym], prevT = lastPxT[sym], now = Date.now();
     lastPx[sym] = price;
+    lastPxT[sym] = now;
     if (prev == null || prev === price) return;
     for (const a of state.alerts) {
-      if (isMarkerAlert(a) || !a.active || a.symbol !== sym || servedByServer(a)) continue;
-      if ((prev < a.price && price >= a.price) || (prev > a.price && price <= a.price)) fireAlert(a, price);
+      if (!AL.isTick(a) || !a.active || a.symbol !== sym || servedByServer(a)) continue;
+      if (AL.isLine(a)) { const res = AL.lineCrossed(a, prev, prevT, price, now, now); if (res) fireAlert(a, price, res); }
+      else if (AL.priceCrossed(a, prev, price)) fireAlert(a, price);
     }
   }
 
@@ -2921,8 +3021,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     try { if ('Notification' in window && Notification.permission === 'granted') new Notification('Candela alert', { body: msg }); } catch (e) { /* ignore */ }
   }
 
-  function fireAlert(a, price) {
-    const msg = AL.applyPriceFire(a, price);
+  function fireAlert(a, price, lineRes) {
+    const msg = lineRes ? AL.applyLineFire(a, price, lineRes) : AL.applyPriceFire(a, price);
     if (a.server) a.dirty = true; // fired here while the server was away: tell it later
     save();
     refreshAlerts();
@@ -3572,7 +3672,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
 
   function syncMarkerFeeds() {
     const want = new Set();
-    for (const a of state.alerts) if (isMarkerAlert(a) && a.active && !servedByServer(a) && !isDemo(a.symbol) && !a.symbol.startsWith('CSV:')) want.add(feedKey(a));
+    for (const a of state.alerts) if (AL.isBar(a) && a.active && !servedByServer(a) && !isDemo(a.symbol) && !a.symbol.startsWith('CSV:')) want.add(feedKey(a));
     for (const [k, f] of markerFeeds) if (!want.has(k)) { f.dead = true; if (f.stop) f.stop(); clearTimeout(f.timer); markerFeeds.delete(k); }
     for (const k of want) if (!markerFeeds.has(k)) startMarkerFeed(k);
   }
@@ -3601,7 +3701,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     });
   }
 
-  const alertsFor = (symbol, tf) => state.alerts.filter((a) => isMarkerAlert(a) && a.active && !servedByServer(a) && a.symbol === symbol && a.tf === tf);
+  const alertsFor = (symbol, tf) => state.alerts.filter((a) => AL.isBar(a) && a.active && !servedByServer(a) && a.symbol === symbol && a.tf === tf);
 
   // a new bar is checked immediately (bar-close alerts); ticks inside a bar at most once a second
   function scheduleFeedCheck(f, newBar) {
@@ -3632,12 +3732,13 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   // prime = record the markers already present so only new ones fire
   function evaluateMarkerAlert(a, bars, prime) {
     if (!a.active || servedByServer(a)) return;
-    const res = AL.evaluateMarker(a, scriptDefs.get(a.scriptId), bars, prime, IND.defaults);
+    const cond = AL.isCond(a);
+    const res = cond ? AL.evaluateCondition(a, bars, prime, resolveDef, IND.defaults) : AL.evaluateMarker(a, scriptDefs.get(a.scriptId), bars, prime, IND.defaults);
     if (res.type === 'pause') return pauseAlert(a, res.reason);
     if (a.paused) { delete a.paused; save(); refreshAlerts(); }
     if (res.type === 'prime') { a.lastBarT = res.t; save(); return; }
     if (res.type !== 'fire') return;
-    const msg = AL.applyMarkerFire(a, res);
+    const msg = cond ? AL.applyCondFire(a, res) : AL.applyMarkerFire(a, res);
     if (a.server) a.dirty = true; // fired here while the server was away: tell it later
     save();
     refreshAlerts();
@@ -3655,10 +3756,10 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   // scripts changed: re-check paused alerts and pause alerts on deleted scripts
   function recheckMarkerAlerts() {
     for (const a of state.alerts) {
-      if (!isMarkerAlert(a) || !a.active) continue;
+      if (!AL.isBar(a) || !a.active) continue;
       const f = markerFeeds.get(feedKey(a));
-      const bars = f && f.ready ? f.bars : (slots.find((s) => s.symbol === a.symbol && s.tf === a.tf) || {}).chart?.bars;
-      if (!scriptDefs.get(a.scriptId)) pauseAlert(a, 'The script was deleted');
+      const bars = f && f.ready ? f.bars : (slots.find((s) => s.symbol === a.symbol && s.tf === a.tf) || {}).chart?.raw;
+      if (AL.isMarker(a) && !scriptDefs.get(a.scriptId)) pauseAlert(a, 'The script was deleted');
       else if (bars && bars.length) evaluateMarkerAlert(a, bars, true);
     }
   }

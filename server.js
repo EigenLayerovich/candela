@@ -146,7 +146,9 @@ function setPaused(a, reason) {
 // ---------------------------------------------------------------------- marker alerts: one poller per symbol + timeframe
 const feeds = new Map(); // "SYMBOL|tf" -> { symbol, tf, bars, timer, ready, errors, dead }
 const feedKey = (a) => `${a.symbol}|${a.tf}`;
-const activeMarkerAlerts = () => db.alerts.filter((a) => AL.isMarker(a) && a.active && AL.serverEligible(a));
+// alerts checked on candles: script markers and conditions
+const activeMarkerAlerts = () => db.alerts.filter((a) => AL.isBar(a) && a.active && AL.serverEligible(a));
+const resolveDef = (type) => (type.startsWith('script:') ? scriptDefs.get(type.slice(7)) : IND.BY_ID[type]);
 const alertsOnFeed = (f) => activeMarkerAlerts().filter((a) => a.symbol === f.symbol && a.tf === f.tf);
 
 function syncFeeds() {
@@ -163,11 +165,19 @@ function syncFeeds() {
 }
 
 function evaluate(a, bars, prime) {
-  const res = AL.evaluateMarker(a, scriptDefs.get(a.scriptId), bars, prime, IND.defaults);
+  const cond = AL.isCond(a);
+  const res = cond ? AL.evaluateCondition(a, bars, prime, resolveDef, IND.defaults) : AL.evaluateMarker(a, scriptDefs.get(a.scriptId), bars, prime, IND.defaults);
   if (res.type === 'pause') return setPaused(a, res.reason);
   if (a.paused) setPaused(a, null);
   if (res.type === 'prime') { a.lastBarT = res.t; saveSoon(); }
-  if (res.type === 'fire') fire(a, AL.applyMarkerFire(a, res));
+  if (res.type === 'fire') fire(a, cond ? AL.applyCondFire(a, res) : AL.applyMarkerFire(a, res));
+}
+// price alerts and line alerts, on a new price
+const lastTime = {};
+function checkTick(a, sym, cur, now) {
+  const prev = lastPrice[sym] ?? a.refPrice, prevT = lastTime[sym] ?? (a.refPrice != null ? a.created : null);
+  if (AL.isLine(a)) { const res = AL.lineCrossed(a, prev, prevT, cur, now, now); if (res) fire(a, AL.applyLineFire(a, cur, res, now)); }
+  else if (AL.priceCrossed(a, prev, cur)) fire(a, AL.applyPriceFire(a, cur));
 }
 
 async function runFeed(f) {
@@ -248,7 +258,7 @@ async function knownSymbols() {
   return symbolSet;
 }
 async function pollPrices() {
-  const list = db.alerts.filter((a) => !AL.isMarker(a) && a.active && AL.serverEligible(a) && !MD.isStock(a.symbol) && !MD.exchangeOf(a.symbol));
+  const list = db.alerts.filter((a) => AL.isTick(a) && a.active && AL.serverEligible(a) && !MD.isStock(a.symbol) && !MD.exchangeOf(a.symbol));
   const syms = [...new Set(list.map((a) => a.symbol))];
   if (!syms.length) return;
   let rows;
@@ -260,12 +270,10 @@ async function pollPrices() {
   for (const row of rows) {
     const cur = +row.price;
     if (!isFinite(cur)) continue;
-    for (const a of list) {
-      if (a.symbol !== row.symbol || !a.active) continue;
-      const prev = lastPrice[row.symbol] ?? a.refPrice;
-      if (AL.priceCrossed(a, prev, cur)) fire(a, AL.applyPriceFire(a, cur));
-    }
+    const now = Date.now();
+    for (const a of list) if (a.symbol === row.symbol && a.active) checkTick(a, row.symbol, cur, now);
     lastPrice[row.symbol] = cur;
+    lastTime[row.symbol] = now;
   }
 }
 
@@ -275,17 +283,15 @@ async function pollExchangePrices() {
   if (exPolling) return;
   exPolling = true;
   try {
-    const list = db.alerts.filter((a) => !AL.isMarker(a) && a.active && MD.exchangeOf(a.symbol));
+    const list = db.alerts.filter((a) => AL.isTick(a) && a.active && MD.exchangeOf(a.symbol));
     await Promise.all([...new Set(list.map((a) => a.symbol))].map(async (sym) => {
       let cur;
       try { cur = (await MD.ticker(sym)).c; } catch (e) { return; }
       if (!isFinite(cur)) return;
-      for (const a of list) {
-        if (a.symbol !== sym || !a.active) continue;
-        const prev = lastPrice[sym] ?? a.refPrice;
-        if (AL.priceCrossed(a, prev, cur)) fire(a, AL.applyPriceFire(a, cur));
-      }
+      const now = Date.now();
+      for (const a of list) if (a.symbol === sym && a.active) checkTick(a, sym, cur, now);
       lastPrice[sym] = cur;
+      lastTime[sym] = now;
     }));
   } finally { exPolling = false; }
 }
@@ -293,7 +299,7 @@ async function pollExchangePrices() {
 const stockPx = {}; // symbol -> { prev, lastT, lastCheck }
 async function pollStockPrices() {
   if (!db.settings.twelveData.key) return;
-  const list = db.alerts.filter((a) => !AL.isMarker(a) && a.active && MD.isStock(a.symbol));
+  const list = db.alerts.filter((a) => AL.isTick(a) && a.active && MD.isStock(a.symbol));
   for (const sym of [...new Set(list.map((a) => a.symbol))]) {
     if (!MD.marketOpen(sym)) continue;
     const st = stockPx[sym] || (stockPx[sym] = { prev: null, lastT: 0, lastCheck: 0 });
@@ -307,10 +313,12 @@ async function pollStockPrices() {
       for (const a of list) {
         if (a.symbol !== sym || !a.active) continue;
         const prev = st.prev ?? a.refPrice;
+        if (AL.isLine(a)) { const res = AL.lineCrossed(a, prev, st.prevT ?? a.created, b.c, b.t + 60e3); if (res) fire(a, AL.applyLineFire(a, b.c, res)); }
         // touched the level anywhere inside this minute?
-        if (prev != null && ((prev < a.price && b.h >= a.price) || (prev > a.price && b.l <= a.price))) fire(a, AL.applyPriceFire(a, b.c));
+        else if (AL.priceTouched(a, prev, b)) fire(a, AL.applyPriceFire(a, b.c));
       }
       st.prev = b.c;
+      st.prevT = b.t + 60e3;
       st.lastT = b.t;
     }
   }
@@ -322,7 +330,7 @@ function recheckScriptAlerts(scriptId) {
     if (scriptId && a.scriptId !== scriptId) continue;
     const f = feeds.get(feedKey(a));
     if (f && f.ready) evaluate(a, f.bars, true);
-    else if (!scriptDefs.get(a.scriptId)) setPaused(a, 'The script was deleted');
+    else if (AL.isMarker(a) && !scriptDefs.get(a.scriptId)) setPaused(a, 'The script was deleted');
   }
 }
 
@@ -363,6 +371,34 @@ async function makeAlert(b) {
   const base = { id, symbol: b.symbol, active: b.active !== false, created: num(b.created) || Date.now(), fires: num(b.fires) || 0 };
   if (num(b.lastFired)) base.lastFired = b.lastFired;
   if (num(b.triggeredAt)) base.triggeredAt = b.triggeredAt;
+  if (b.kind === 'cond') {
+    if (typeof b.tf !== 'string' || !MD.ensureTf(b.tf)) throw new BadRequest('Unknown timeframe');
+    const side = (s, allowValue) => {
+      if (!s || typeof s !== 'object') throw new BadRequest('Incomplete condition');
+      if (s.src === 'price') return { src: 'price' };
+      if (s.src === 'value' && allowValue && num(s.value) !== undefined) return { src: 'value', value: s.value };
+      if (s.src === 'ind' && str(s.type, 60) && /^(script:)?[A-Za-z0-9_-]{1,50}$/.test(s.type) && str(s.key, 20) && str(s.label, 160)) {
+        return { src: 'ind', type: s.type, key: s.key, label: s.label, params: cleanParams(s.params) };
+      }
+      throw new BadRequest('Invalid condition');
+    };
+    if (!AL.OPS[b.op]) throw new BadRequest('Unknown condition');
+    return {
+      ...base, kind: 'cond', tf: b.tf, left: side(b.left, false), right: side(b.right, true), op: b.op,
+      when: b.when === 'bar' ? 'bar' : 'close', repeat: b.repeat === 'once' ? 'once' : 'every', ...(num(b.lastBarT) ? { lastBarT: b.lastBarT } : {}),
+    };
+  }
+  if (b.kind === 'line') {
+    if (!Array.isArray(b.lines) || !b.lines.length || b.lines.length > 2) throw new BadRequest('A line alert needs one or two lines');
+    const lines = b.lines.map((l) => {
+      if (!l || !Array.isArray(l.pts) || l.pts.length !== 2 || !l.pts.every((q) => q && num(q.t) !== undefined && num(q.p) !== undefined)) throw new BadRequest('Invalid line');
+      return { pts: l.pts.map((q) => ({ t: q.t, p: q.p })), ext: ['segment', 'ray', 'extended'].includes(l.ext) ? l.ext : 'segment' };
+    });
+    return {
+      ...base, kind: 'line', lines, dir: ['up', 'down'].includes(b.dir) ? b.dir : undefined, repeat: b.repeat === 'every' ? 'every' : 'once',
+      name: str(b.name, 60) ? b.name : 'line', ...(str(b.drawingId, 40) ? { drawingId: b.drawingId } : {}), ...(num(b.refPrice) ? { refPrice: b.refPrice } : {}),
+    };
+  }
   if (b.kind === 'marker') {
     if (typeof b.tf !== 'string' || !MD.ensureTf(b.tf)) throw new BadRequest('Unknown timeframe'); // standard or custom (2d, 3h…)
     if (!MD.supportsTf(b.symbol, b.tf)) throw new BadRequest(`The ${b.tf} timeframe is not available for ${b.symbol}`);
@@ -374,7 +410,7 @@ async function makeAlert(b) {
     };
   }
   if (!(num(b.price) > 0)) throw new BadRequest('A price alert needs a price');
-  return { ...base, price: b.price, ...(num(b.refPrice) ? { refPrice: b.refPrice } : {}) };
+  return { ...base, price: b.price, ...(['up', 'down'].includes(b.dir) ? { dir: b.dir } : {}), ...(num(b.refPrice) ? { refPrice: b.refPrice } : {}) };
 }
 
 function upsertScript(s) {
@@ -476,11 +512,11 @@ async function handleApi(req, res, url) {
     const a = await makeAlert(await readJson(req));
     db.alerts.push(a);
     // record markers already on the chart so a new alert only fires on new ones
-    if (AL.isMarker(a)) { const f = feeds.get(feedKey(a)); if (f && f.ready) evaluate(a, f.bars, true); }
+    if (AL.isBar(a)) { const f = feeds.get(feedKey(a)); if (f && f.ready) evaluate(a, f.bars, true); }
     saveSoon();
     syncFeeds();
     broadcastState();
-    log('Alert added:', AL.isMarker(a) ? AL.markerTitle(a) : `${a.symbol} crossing ${a.price}`);
+    log('Alert added:', AL.isMarker(a) ? AL.markerTitle(a) : AL.isCond(a) ? AL.condTitle(a) : AL.isLine(a) ? AL.lineTitle(a) : `${a.symbol} crossing ${a.price}`);
     return send(res, 201, a);
   }
   if ((mm = p.match(/^\/api\/alerts\/([A-Za-z0-9_-]+)$/))) {

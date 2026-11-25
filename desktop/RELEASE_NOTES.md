@@ -1,4 +1,11 @@
-## New in 1.11.0
+## New in 1.12.0
+
+- **Condition alerts**: price or any indicator line crossing, crossing up/down, greater or less than a value or another line (RSI crossing 30, EMA 20 crossing EMA 50, price above SMA 200…). The bell on every indicator's legend opens them.
+- **Alerts on drawn lines**: trend lines, rays, extended lines and parallel channels (Alert in the line's toolbar). Moving the line moves the alert.
+- Price alerts can fire only when crossing up or only when crossing down.
+- All of them also run on the alert server, with the app closed.
+
+## In 1.11.0
 
 - **Undo / redo** for drawings and indicators (Ctrl+Z / Ctrl+Y).
 - **Object tree**: list, hide, lock and delete the indicators and drawings on a chart.

@@ -24,6 +24,40 @@
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   const pad2 = (n) => String(n).padStart(2, '0');
+
+  // ---- time zone for the time axis and dates: 'local' (this computer), 'UTC', or a place ("America/New_York")
+  let TZ = 'local';
+  const tzCache = new Map();
+  let tzFmt = null;
+  // milliseconds to add to a UTC time to get the wall-clock time in the chosen zone (cached per hour)
+  function tzOffset(t) {
+    if (TZ === 'UTC') return 0;
+    if (TZ === 'local') return -new Date(t).getTimezoneOffset() * 60e3;
+    const hour = Math.floor(t / 3600e3);
+    let v = tzCache.get(hour);
+    if (v === undefined) {
+      const parts = {};
+      for (const x of tzFmt.formatToParts(new Date(hour * 3600e3))) parts[x.type] = x.value;
+      const wall = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute, +parts.second);
+      v = wall - hour * 3600e3;
+      if (tzCache.size > 20000) tzCache.clear();
+      tzCache.set(hour, v);
+    }
+    return v;
+  }
+  function setTimeZone(tz) {
+    try {
+      if (tz && tz !== 'local' && tz !== 'UTC') tzFmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
+      TZ = tz || 'local';
+    } catch (e) { TZ = 'local'; }
+    tzCache.clear();
+  }
+  // a Date whose UTC fields read as the wall-clock time in the chosen zone
+  const zd = (t) => new Date(t + tzOffset(t));
+
+  // ---- appearance settings for every chart (Chart settings): colors, grid, lines, watermark
+  let LOOK = {};
+  const setLook = (o) => { LOOK = { ...(o || {}) }; };
   const uid = () => Math.random().toString(36).slice(2, 10);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -306,7 +340,9 @@
 
     setTheme(name) {
       this.themeName = name;
-      this.theme = THEMES[name] || THEMES.dark;
+      const base = THEMES[name] || THEMES.dark, o = {};
+      for (const k of ['up', 'down', 'bg', 'grid', 'cross']) if (LOOK[k]) o[k] = LOOK[k];
+      this.theme = { ...base, ...o };
       this.invalidate();
     }
 
@@ -919,14 +955,14 @@
       let unit = units[units.length - 1];
       for (const u of units) if (u[0] >= iv && (u[0] / iv) * this.spacing >= 52) { unit = u; break; }
       const key = (t) => {
-        const d = new Date(t);
+        const w = t + tzOffset(t), d = new Date(w);
         switch (unit[1]) {
-          case 'M1': return d.getFullYear() * 12 + d.getMonth();
-          case 'M3': return Math.floor((d.getFullYear() * 12 + d.getMonth()) / 3);
-          case 'Y1': return d.getFullYear();
-          case 'Y5': return Math.floor(d.getFullYear() / 5);
-          case 'w': return Math.floor((t - d.getTimezoneOffset() * 60e3) / 86400e3 / 7 + 0.43);
-          default: return Math.floor((t - d.getTimezoneOffset() * 60e3) / unit[0]);
+          case 'M1': return d.getUTCFullYear() * 12 + d.getUTCMonth();
+          case 'M3': return Math.floor((d.getUTCFullYear() * 12 + d.getUTCMonth()) / 3);
+          case 'Y1': return d.getUTCFullYear();
+          case 'Y5': return Math.floor(d.getUTCFullYear() / 5);
+          case 'w': return Math.floor(w / 86400e3 / 7 + 0.43);
+          default: return Math.floor(w / unit[0]);
         }
       };
       let prev = a > 0 ? key(B[a - 1].t) : null, lastX = -Infinity;
@@ -942,21 +978,21 @@
     }
 
     _tickLabel(t, u) {
-      const d = new Date(t);
-      if (u === 'Y1' || u === 'Y5') return String(d.getFullYear());
-      if (u === 'M1' || u === 'M3') return d.getMonth() === 0 ? String(d.getFullYear()) : MONTHS[d.getMonth()];
+      const d = zd(t);
+      if (u === 'Y1' || u === 'Y5') return String(d.getUTCFullYear());
+      if (u === 'M1' || u === 'M3') return d.getUTCMonth() === 0 ? String(d.getUTCFullYear()) : MONTHS[d.getUTCMonth()];
       if (u === 'd' || u === 'w') {
-        if (d.getDate() === 1 || (u === 'w' && d.getDate() <= 7)) return d.getMonth() === 0 && d.getDate() <= 7 && u === 'w' ? String(d.getFullYear()) : MONTHS[d.getMonth()];
-        return String(d.getDate());
+        if (d.getUTCDate() === 1 || (u === 'w' && d.getUTCDate() <= 7)) return d.getUTCMonth() === 0 && d.getUTCDate() <= 7 && u === 'w' ? String(d.getUTCFullYear()) : MONTHS[d.getUTCMonth()];
+        return String(d.getUTCDate());
       }
-      if (d.getHours() === 0 && d.getMinutes() === 0) return d.getDate() === 1 ? MONTHS[d.getMonth()] : String(d.getDate());
-      return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+      if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) return d.getUTCDate() === 1 ? MONTHS[d.getUTCMonth()] : String(d.getUTCDate());
+      return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
     }
 
     fmtTimeFull(t) {
-      const d = new Date(t);
-      const date = `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]} '${String(d.getFullYear()).slice(2)}`;
-      return this.interval >= 86400e3 ? date : `${date}  ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+      const d = zd(t);
+      const date = `${DAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} '${String(d.getUTCFullYear()).slice(2)}`;
+      return this.interval >= 86400e3 ? date : `${date}  ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
     }
 
     // ------------------------------------------------------------------ rendering
@@ -992,9 +1028,20 @@
         ctx.strokeStyle = T.grid;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        for (const v of ticks) { const y = Math.round(this.yOf(p, v)) + 0.5; ctx.moveTo(0, y); ctx.lineTo(this.plotW, y); }
-        for (const tk of timeTicks) { const x = Math.round(this.xAt(tk.i)) + 0.5; ctx.moveTo(x, p.top); ctx.lineTo(x, p.top + p.h); }
+        if (LOOK.hgrid !== false) for (const v of ticks) { const y = Math.round(this.yOf(p, v)) + 0.5; ctx.moveTo(0, y); ctx.lineTo(this.plotW, y); }
+        if (LOOK.vgrid !== false) for (const tk of timeTicks) { const x = Math.round(this.xAt(tk.i)) + 0.5; ctx.moveTo(x, p.top); ctx.lineTo(x, p.top + p.h); }
         ctx.stroke();
+        // watermark: the symbol, large and faint, behind the price chart
+        if (p === this.main && LOOK.watermark && this.watermark) {
+          ctx.save();
+          ctx.fillStyle = withAlpha(T.text.startsWith('#') ? T.text : '#888888', 0.12);
+          const size = Math.max(18, Math.min(72, this.plotW / 12));
+          ctx.font = `700 ${size}px ` + getComputedStyle(this.el).fontFamily;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(this.watermark, this.plotW / 2, p.top + p.h / 2);
+          ctx.restore();
+        }
 
         if (p !== this.main) this._drawLevels(p);
         const inds = this.indicators.filter((i) => i.pane === p && i.visible);
@@ -1007,7 +1054,7 @@
         if (p === this.main) {
           this._drawTrades(p);
           this._drawAlerts(p);
-          if (!this.drawingsHidden) for (const dr of this.drawings) this._drawDrawing(dr, dr === this.selected);
+          if (!this.drawingsHidden) for (const dr of this.drawings) if (!dr.hidden) this._drawDrawing(dr, dr === this.selected);
           if (this.creating) this._drawDrawing(this.creating, true);
         }
         ctx.restore();
@@ -1078,6 +1125,19 @@
         if (!tr.open) mark(x1, y1, !long, res, `${tr.pnlPct >= 0 ? '+' : ''}${tr.pnlPct.toFixed(1)}%`);
       }
       ctx.restore();
+    }
+
+    // show the candles from t0 to t1 (date-range buttons)
+    setVisibleRange(t0, t1) {
+      if (!this.bars.length) return;
+      const i0 = this.timeToIndex(t0), i1 = Math.min(this.timeToIndex(t1), this.lastIndex);
+      this.spacing = clamp((this.plotW * 0.94) / Math.max(1, i1 - i0 + 1), 0.5, 80); // (down to 2 candles per pixel, so a day of 1m candles fits)
+      this.rightOffset = i1 - this.lastIndex + 2;
+      this._clampView();
+      this._checkHistory();
+      this._viewChanged();
+      this._legendIdx = -2;
+      this.invalidate();
     }
 
     // center the chart on a time (Strategy Tester: jump to a trade)
@@ -1444,7 +1504,7 @@
       if (p === this.main) {
         if (!this.drawingsHidden) {
           for (const d of this.drawings) {
-            if (DRAW() && DRAW().TOOLS[d.type] && DRAW().TOOLS[d.type].axis) this._axisLabel(this.yOf(p, d.pts[0].p), this._fmtMain(d.pts[0].p), d.color || T.drawing, '#fff', p);
+            if (!d.hidden && DRAW() && DRAW().TOOLS[d.type] && DRAW().TOOLS[d.type].axis) this._axisLabel(this.yOf(p, d.pts[0].p), this._fmtMain(d.pts[0].p), d.color || T.drawing, '#fff', p);
           }
         }
         for (const al of this.alerts) this._axisLabel(this.yOf(p, al.price), this._fmtMain(al.price), T.alert, '#111', p);
@@ -1459,8 +1519,10 @@
         ctx.strokeStyle = color;
         ctx.setLineDash([1, 2]);
         ctx.beginPath();
-        ctx.moveTo(0, Math.round(y) + 0.5);
-        ctx.lineTo(this.plotW, Math.round(y) + 0.5);
+        if (LOOK.lastLine !== false) {
+          ctx.moveTo(0, Math.round(y) + 0.5);
+          ctx.lineTo(this.plotW, Math.round(y) + 0.5);
+        }
         ctx.stroke();
         ctx.restore();
         ctx.save();
@@ -1468,7 +1530,7 @@
         ctx.rect(this.plotW, p.top, this.axisW, p.h);
         ctx.clip();
         this._axisLabel(y, this._fmtMain(real.c), color, '#fff', p);
-        if (this.live && this.countdown !== false && !this.isBrick && this.interval < 7 * 86400e3) {
+        if (this.live && this.countdown !== false && LOOK.countdown !== false && !this.isBrick && this.interval < 7 * 86400e3) {
           const left = Math.max(0, real.t + this.interval - Date.now());
           const s = Math.floor(left / 1000), hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
           const txt = (hh ? hh + ':' + pad2(mm) : pad2(mm)) + ':' + pad2(ss);
@@ -1597,7 +1659,7 @@
       try {
         for (let k = this.drawings.length - 1; k >= 0; k--) {
           const d = this.drawings[k], tool = DR.TOOLS[d.type];
-          if (!tool) continue;
+          if (!tool || d.hidden) continue;
           const P = this._toolPoints(d);
           if (d === this.selected) {
             const H = this._handles(d, tool, P, api);
@@ -1977,5 +2039,5 @@
     }
   }
 
-  window.CandelaChart = { Chart, THEMES, decimalsFor, fmtCompact };
+  window.CandelaChart = { Chart, THEMES, decimalsFor, fmtCompact, setTimeZone, tzOffset, setLook };
 })();

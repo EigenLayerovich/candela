@@ -1,4 +1,12 @@
-## New in 1.10.0
+## New in 1.11.0
+
+- **Undo / redo** for drawings and indicators (Ctrl+Z / Ctrl+Y).
+- **Object tree**: list, hide, lock and delete the indicators and drawings on a chart.
+- **Bottom bar**: 1D 5D 1M 3M 6M YTD 1Y 5Y All date ranges, Go to date, clock and **time zone** setting.
+- **Chart settings**: candle colors, background, grid, watermark, price line, countdown.
+- **Saved layouts** and **indicator templates**.
+
+## In 1.10.0
 
 - **Bar Replay**: play history back candle by candle (Replay, top bar), with play/pause, speed and step.
 - **Strategy Tester**: write a strategy in Candela Script (buy / sell / sellshort / cover rules, optional stop and target) and backtest it: net profit, win rate, profit factor, drawdown, equity curve vs buy & hold, list of trades, trades marked on the chart. Two example strategies are in the script editor.

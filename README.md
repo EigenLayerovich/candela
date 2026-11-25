@@ -302,6 +302,22 @@ week shows the daily SMA as of its last day. On a lower-timeframe chart the curr
 with the live price until the day closes, as on other charting apps. It works for oscillators too
 (an RSI on 1D below a 1H chart). Custom scripts always use the chart's timeframe.
 
+## Working with charts
+
+- **Undo / redo** (`Ctrl+Z`, `Ctrl+Y` or `Ctrl+Shift+Z`, or the arrows at the top): drawings and indicators,
+  per chart.
+- **Object tree** (list button in the left toolbar): every indicator and drawing on the chart. Show or hide,
+  lock, delete, open an indicator's settings, or click a drawing to jump to it.
+- **Bottom bar**: date ranges **1D 5D 1M 3M 6M YTD 1Y 5Y All** (each picks a fitting timeframe and loads
+  the history it needs), **Go to date** (calendar button), the current time and the **time zone** of the time
+  axis (your computer, UTC, or a market city).
+- **Chart settings** (gear at the top): up/down candle colors, background, grid lines, symbol watermark,
+  last price line, candle countdown, time zone. They apply to every chart; *Defaults* resets them.
+- **Saved layouts** (layout menu → *Save this layout as…*): keep named sets of charts (symbols, timeframes,
+  indicators, chart types and arrangement) and switch between them.
+- **Indicator templates** (Indicators → *Templates*): save a chart's indicators under a name and apply them
+  to any chart in one click.
+
 ## Bar Replay
 
 **Replay** (top bar) plays history back as if it were live, to practise reading the chart. Click it, then
@@ -416,6 +432,7 @@ new version over the old one (quit Candela from the tray first); your charts and
 | Tools | `Alt+T` trend, `Alt+H` horizontal, `Alt+J` horizontal ray, `Alt+V` vertical, `Alt+C` crossline, `Alt+F` fib, `Alt+M` measure, `Alt+Shift+R` rectangle |
 | Finish a path / polyline | double-click or `Enter` |
 | Bar Replay: next candle | `Shift+→` |
+| Undo / redo | `Ctrl+Z` / `Ctrl+Y` (or `Ctrl+Shift+Z`) |
 | Alert | `Alt+A`, or right-click the chart → *Add alert at …* |
 | Delete drawing | select it, then `Del` |
 | Focus chart N in a layout | `Alt+1` … `Alt+6` |

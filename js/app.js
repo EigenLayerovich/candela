@@ -4,6 +4,7 @@
 (function () {
   'use strict';
   const { Chart, decimalsFor } = window.CandelaChart;
+  const CC = window.CandelaChart;
   const MD = window.MarketData, IND = window.Indicators;
   const $ = (s, el = document) => el.querySelector(s);
   const h = (tag, attrs = {}, ...kids) => {
@@ -103,6 +104,11 @@
     favTools: [], // starred drawing tools (the heart menu)
     tester: { open: false, tab: 'overview', height: 280 }, // Strategy Tester panel
     replaySpeed: 2, // Bar Replay: candles per second
+    timeZone: 'local', // time axis: 'local', 'UTC' or a place like 'America/New_York'
+    look: {}, // Chart settings: colors, grid, price line, countdown, watermark
+    savedLayouts: [], // named layouts
+    indTemplates: [], // named indicator sets
+    objTree: false, // object tree panel open
     watchlist: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'LINKUSDT', 'AVAXUSDT', 'LTCUSDT'],
   };
   function loadState() {
@@ -121,6 +127,8 @@
   // Set by the single-file preview build, where the sandbox blocks exchange connections.
   const PREVIEW = !!window.CANDELA_PREVIEW;
   const state = loadState();
+  CC.setTimeZone(state.timeZone || 'local');
+  CC.setLook(state.look || {});
   if (!state.exNotes || typeof state.exNotes !== 'object') state.exNotes = {};
   if (!Array.isArray(state.customTfs)) state.customTfs = [];
   state.customTfs = state.customTfs.filter((tf) => MD.ensureTf(tf));
@@ -273,6 +281,8 @@
       if (nStrat > this._nStrat && this === active && !state.tester.open) openTester();
       this._nStrat = nStrat;
       testerRefreshSoon(this);
+      recordHistory(this);
+      renderObjTree();
     }
 
     // ---- Bar Replay: hide what came after a chosen candle, then play the candles back one at a time.
@@ -405,6 +415,17 @@
       clearTimeout(this.infoTimer);
       this.infoTimer = null;
       this.chart.setInfo('');
+    }
+
+    // replace all indicators (undo, templates)
+    setIndicators(list) {
+      const c = this.chart;
+      for (const i of [...c.indicators]) c.removeIndicator(i.id);
+      for (const s of list || []) {
+        const def = resolveDef(s.type);
+        if (def) c.addIndicator(def, s.params || {}, { colors: s.colors, visible: s.visible, weight: s.weight, tf: s.tf, styles: s.styles });
+      }
+      this.persistIndicators();
     }
 
     // ---- indicators set to another timeframe (a daily SMA on a 4H chart…): that timeframe's candles
@@ -576,6 +597,7 @@
       }
       if (gen !== this.gen) return;
       c.title = this.title();
+      c.watermark = `${bare(sym)}, ${sym.startsWith('CSV:') ? 'CSV' : tfName(tf)}`;
       c.countdown = !isStock(sym) && !/M$/.test(tf); // stock bars don't close on the clock (sessions, closed markets)
       c.setData(bars, interval, { resetView: true });
       if (this === active) updateHeader();
@@ -592,6 +614,7 @@
       this.startCompares();
       this.syncTfFeeds();
       this.startInfo();
+      resetHistory(this);
       primeChartAlerts(this);
       if (MD.isBStock(sym) && !state.bstockNoteSeen) {
         state.bstockNoteSeen = true;
@@ -792,6 +815,51 @@
       if (s !== src && s.symbol === src.symbol) { s.chart.drawings = src.chart.drawings; s.chart.invalidate(); }
     }
     save();
+    recordHistory(src);
+    renderObjTree();
+  }
+
+  // ---- undo / redo: drawings and indicators of each chart (Ctrl+Z, Ctrl+Y)
+  const hist = new WeakMap(); // slot -> { stack: [snapshot json], i }
+  let restoring = false;
+  const snapOf = (slot) => JSON.stringify({ sym: slot.symbol, drawings: slot.chart.drawings, indicators: slot.cfg.indicators || [] });
+  function resetHistory(slot) { hist.set(slot, { stack: [snapOf(slot)], i: 0 }); updateUndoButtons(); }
+  function recordHistory(slot) {
+    if (restoring) return;
+    const H = hist.get(slot);
+    if (!H) { resetHistory(slot); return; }
+    const snap = snapOf(slot);
+    if (H.stack[H.i] === snap) return;
+    H.stack.length = H.i + 1; // a new change drops what could be redone
+    H.stack.push(snap);
+    if (H.stack.length > 100) H.stack.shift();
+    H.i = H.stack.length - 1;
+    updateUndoButtons();
+  }
+  function undoRedo(dir) {
+    const slot = active, H = hist.get(slot);
+    if (!H) return;
+    const j = H.i + dir;
+    if (j < 0 || j >= H.stack.length) { toast(dir < 0 ? 'Nothing to undo' : 'Nothing to redo', 'info', 1500); return; }
+    const snap = JSON.parse(H.stack[j]);
+    if (snap.sym !== slot.symbol) return;
+    H.i = j;
+    restoring = true;
+    try {
+      const c = slot.chart;
+      c.select(null);
+      c.drawings = snap.drawings;
+      drawingsChanged(slot);
+      slot.setIndicators(snap.indicators);
+    } finally { restoring = false; }
+    c_invalidate(slot);
+    updateUndoButtons();
+  }
+  const c_invalidate = (slot) => { slot.chart.invalidate(); renderObjTree(); };
+  function updateUndoButtons() {
+    const H = active && hist.get(active);
+    $('#undoBtn').disabled = !H || H.i <= 0;
+    $('#redoBtn').disabled = !H || H.i >= H.stack.length - 1;
   }
 
   function setActive(slot) {
@@ -812,6 +880,8 @@
     updateDocTitle();
     save();
     if (state.tester.open) runTester();
+    updateUndoButtons();
+    renderObjTree();
   }
 
   // Next symbol for a newly added chart: the next watchlist symbol not already on screen.
@@ -1171,6 +1241,9 @@
       save();
     });
     $('#alertBtn').addEventListener('click', () => openAlertDialog());
+    $('#undoBtn').addEventListener('click', () => undoRedo(-1));
+    $('#redoBtn').addEventListener('click', () => undoRedo(1));
+    $('#settingsBtn').addEventListener('click', openChartSettings);
     $('#replayBtn').addEventListener('click', () => { if (active.replay) active.exitReplay(); else if (active.chart.picking) { active.chart.cancelPick(); updateHeader(); } else active.startReplayPick(); });
     $('#testerBtn').addEventListener('click', () => (state.tester.open ? closeTester() : openTester()));
     $('#logBtn').addEventListener('click', () => {
@@ -1320,11 +1393,37 @@
         menu.classList.add('hidden');
       } }, 'Make all charts equal size'));
     }
-    menu.append(...kids, syncBox);
+    // named layouts: the charts (symbols, timeframes, indicators, chart types) and the arrangement
+    const saved = h('div', { class: 'sync-box' }, h('div', { class: 'menu-label' }, 'Saved layouts'));
+    for (const L of state.savedLayouts) {
+      saved.appendChild(h('div', { class: 'saved-row' },
+        h('button', { class: 'saved-name', title: 'Open this layout', onclick: () => { menu.classList.add('hidden'); openSavedLayout(L); } }, L.name, h('small', { class: 'muted' }, ` · ${LAYOUTS[L.layout] ? LAYOUTS[L.layout].name : ''}`)),
+        h('button', { class: 'saved-x', title: 'Delete', onclick: () => { state.savedLayouts = state.savedLayouts.filter((x) => x !== L); save(); menu.classList.add('hidden'); toggleLayoutMenu(); } }, '✕')));
+    }
+    saved.appendChild(h('button', { class: 'btn ghost equal-btn', onclick: async () => {
+      menu.classList.add('hidden');
+      const name = await askText('Save layout', '', 'Name, e.g. "BTC multi-timeframe"');
+      if (!name) return;
+      const entry = { name: name.slice(0, 60), layout: state.layout, charts: clone(state.charts.slice(0, LAYOUTS[state.layout].cells.length)), sync: clone(state.sync), sizes: state.layoutSizes ? clone(state.layoutSizes[state.layout] || null) : null };
+      const i = state.savedLayouts.findIndex((x) => x.name === entry.name);
+      if (i >= 0) state.savedLayouts[i] = entry; else state.savedLayouts.push(entry);
+      save();
+      toast(`Layout "${entry.name}" saved`, 'info', 2000);
+    } }, 'Save this layout as…'));
+    menu.append(...kids, syncBox, saved);
     menu.classList.remove('hidden');
     const r = $('#layoutBtn').getBoundingClientRect();
     menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
     menu.style.top = r.bottom + 6 + 'px';
+  }
+
+  function openSavedLayout(L) {
+    for (const s of slots) s.exitReplay(false);
+    state.charts = clone(L.charts);
+    state.sync = { ...state.sync, ...clone(L.sync || {}) };
+    if (L.sizes) { state.layoutSizes = state.layoutSizes || {}; state.layoutSizes[L.layout] = clone(L.sizes); }
+    rebuildSlots(L.layout);
+    toast(`Opened "${L.name}"`, 'info', 1800);
   }
 
   // ------------------------------------------------------------------ drawing toolbar
@@ -1395,6 +1494,9 @@
       for (const s of slots) { s.chart.drawingsHidden = drawingsHidden; s.chart.select(null); s.chart.invalidate(); }
     } });
     hide.innerHTML = svg('eye');
+    const tree = h('button', { class: 'tool', id: 'objTreeBtn', title: 'Object tree: indicators and drawings on this chart', onclick: () => { state.objTree = !state.objTree; save(); renderObjTree(); } });
+    tree.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 5h3M4 12h3M4 19h3M10 5h10M10 12h10M10 19h10"/></svg>';
+    tb.appendChild(tree);
     const trash = h('button', { class: 'tool', title: 'Remove all drawings on this symbol', onclick: removeAllDrawings });
     trash.innerHTML = svg('trash');
     tb.append(mag, hide, trash);
@@ -1748,6 +1850,28 @@
     const render = () => {
       const q = input.value.trim().toLowerCase();
       list.innerHTML = '';
+      // indicator templates: a saved set of indicators, applied in one click
+      if (!q || 'template'.includes(q) || state.indTemplates.some((t) => t.name.toLowerCase().includes(q))) {
+        list.appendChild(h('div', { class: 'list-group' }, 'Templates'));
+        for (const t of state.indTemplates.filter((x) => !q || 'template'.includes(q) || x.name.toLowerCase().includes(q))) {
+          list.appendChild(h('div', { class: 'list-row', title: 'Replace this chart\'s indicators with the template', onclick: () => {
+            slot.setIndicators(clone(t.indicators));
+            toast(`Applied template "${t.name}"`, 'info', 1800);
+            closeModal();
+          } }, h('b', {}, t.name), h('span', { class: 'row-actions' }, h('span', { class: 'muted' }, `${t.indicators.length} indicator${t.indicators.length === 1 ? '' : 's'}`),
+            h('button', { class: 'btn small-btn', title: 'Delete template', onclick: (e) => { e.stopPropagation(); state.indTemplates = state.indTemplates.filter((x) => x !== t); save(); render(); } }, '✕'))));
+        }
+        list.appendChild(h('div', { class: 'list-row new-script', onclick: async () => {
+          const name = await askText('Save indicator template', '', 'Name, e.g. "Trend + momentum"');
+          if (!name) { openIndicatorPicker(); return; }
+          const entry = { name: name.slice(0, 60), indicators: clone(slot.cfg.indicators || []) };
+          const i = state.indTemplates.findIndex((x) => x.name === entry.name);
+          if (i >= 0) state.indTemplates[i] = entry; else state.indTemplates.push(entry);
+          save();
+          toast(`Template "${entry.name}" saved (${entry.indicators.length} indicators)`, 'info', 2200);
+          openIndicatorPicker();
+        } }, h('b', {}, '+ Save this chart\'s indicators as a template…'), h('span', { class: 'muted' }, 'Reuse the same set on any chart')));
+      }
       const mine = state.scripts.filter((sc) => scriptDefs.get(sc.id) && (!q || (sc.name || '').toLowerCase().includes(q)));
       if (!q || mine.length || 'script custom'.includes(q)) {
         list.appendChild(h('div', { class: 'list-group' }, 'My scripts'));
@@ -2805,6 +2929,165 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     notify(msg);
   }
 
+  // ---- object tree: the indicators and drawings of the active chart, to show/hide, lock, open or remove
+  function renderObjTree() {
+    let box = document.getElementById('objTree');
+    const btn = document.getElementById('objTreeBtn');
+    if (btn) btn.classList.toggle('active', !!state.objTree);
+    if (!state.objTree || !active) { if (box) box.remove(); return; }
+    if (!box) { box = h('div', { id: 'objTree', class: 'obj-tree', role: 'dialog', 'aria-label': 'Object tree' }); document.body.appendChild(box); }
+    const c = active.chart;
+    box.innerHTML = '';
+    const icon = (path) => { const i = h('span', { class: 'ot-icon' }); i.innerHTML = `<svg viewBox="0 0 24 24">${path}</svg>`; return i; };
+    const EYE = '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>', EYE_OFF = '<path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/>';
+    const LOCK = '<rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', UNLOCK = '<rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/>';
+    const btn2 = (path, title, fn, on) => { const b = h('button', { class: 'ot-btn' + (on ? ' on' : ''), title, onclick: (e) => { e.stopPropagation(); fn(); } }); b.innerHTML = `<svg viewBox="0 0 24 24">${path}</svg>`; return b; };
+    box.append(h('div', { class: 'ot-head' }, h('b', {}, 'Object tree'), h('span', { class: 'muted' }, `${bare(active.symbol)} · ${tfName(active.tf)}`),
+      h('button', { class: 'icon-btn', title: 'Close', onclick: () => { state.objTree = false; save(); renderObjTree(); } }, '✕')));
+    const list = h('div', { class: 'ot-list' });
+    list.appendChild(h('div', { class: 'ot-group' }, `Indicators (${c.indicators.length})`));
+    for (const ind of c.indicators) {
+      list.appendChild(h('div', { class: 'ot-row' + (ind.visible ? '' : ' off'), title: 'Open settings', onclick: () => openIndicatorSettings(active, ind.id) },
+        icon(ind.def.strategy ? '<path d="M4 19h16M6 16l4-5 3 3 5-7"/>' : '<path d="M3 17l5-6 4 4 9-10"/>'),
+        h('span', { class: 'ot-name' }, c.indicatorLabel(ind)),
+        btn2(ind.visible ? EYE : EYE_OFF, ind.visible ? 'Hide' : 'Show', () => { c.toggleIndicator(ind.id); active.persistIndicators(); }, !ind.visible),
+        btn2('<path d="M6 6l12 12M18 6L6 18"/>', 'Remove', () => { c.removeIndicator(ind.id); active.persistIndicators(); })));
+    }
+    list.appendChild(h('div', { class: 'ot-group' }, `Drawings (${c.drawings.length})`));
+    if (!c.drawings.length) list.appendChild(h('div', { class: 'ot-empty muted' }, 'No drawings on this symbol.'));
+    const DRW = window.CandelaDrawings;
+    [...c.drawings].reverse().forEach((d) => {
+      const name = (DRW.TOOLS[d.type] ? DRW.TOOLS[d.type].name : d.type) + (d.text ? ` “${d.text}”` : DRW.TOOLS[d.type] && DRW.TOOLS[d.type].axis ? ` ${c.fmtPrice(d.pts[0].p)}` : '');
+      list.appendChild(h('div', { class: 'ot-row' + (d.hidden ? ' off' : '') + (c.selected === d ? ' sel' : ''), title: 'Select and show on the chart', onclick: () => { if (d.hidden) return; c.select(d); c.scrollToTime(d.pts[0].t); renderObjTree(); } },
+        icon(DRW.ICONS[d.type] || ''), h('span', { class: 'ot-name' }, name),
+        btn2(d.locked ? LOCK : UNLOCK, d.locked ? 'Unlock' : 'Lock', () => { d.locked = !d.locked; c.onDrawingsChange(); }, d.locked),
+        btn2(d.hidden ? EYE_OFF : EYE, d.hidden ? 'Show' : 'Hide', () => { d.hidden = !d.hidden; if (d.hidden && c.selected === d) c.select(null); c.onDrawingsChange(); c.invalidate(); }, d.hidden),
+        btn2('<path d="M6 6l12 12M18 6L6 18"/>', 'Delete', () => { c.drawings = c.drawings.filter((x) => x !== d); if (c.selected === d) c.select(null); c.onDrawingsChange(); c.invalidate(); })));
+    });
+    box.appendChild(list);
+  }
+
+  // ---- bottom bar: date ranges, Go to date, time zone and clock
+  const RANGES = [['1D', 86400e3, '1m'], ['5D', 5 * 86400e3, '5m'], ['1M', 30 * 86400e3, '30m'], ['3M', 91 * 86400e3, '1h'], ['6M', 182 * 86400e3, '2h'], ['YTD', 'ytd', '1d'], ['1Y', 365 * 86400e3, '1d'], ['5Y', 5 * 365 * 86400e3, '1w'], ['All', 'all', '1M']];
+  const ZONES = [['local', 'Your computer'], ['UTC', 'UTC'], ['America/Los_Angeles', 'Los Angeles'], ['America/Chicago', 'Chicago'], ['America/New_York', 'New York'], ['America/Sao_Paulo', 'São Paulo'], ['Europe/London', 'London'], ['Europe/Berlin', 'Berlin / Frankfurt'], ['Europe/Istanbul', 'Istanbul'], ['Europe/Moscow', 'Moscow'], ['Asia/Dubai', 'Dubai'], ['Asia/Kolkata', 'Mumbai'], ['Asia/Singapore', 'Singapore'], ['Asia/Hong_Kong', 'Hong Kong'], ['Asia/Shanghai', 'Shanghai'], ['Asia/Tokyo', 'Tokyo'], ['Asia/Seoul', 'Seoul'], ['Australia/Sydney', 'Sydney']];
+  const utcLabel = (t = Date.now()) => { const m = Math.round(CC.tzOffset(t) / 60e3), a = Math.abs(m); return `UTC${m >= 0 ? '+' : '−'}${Math.floor(a / 60)}${a % 60 ? ':' + String(a % 60).padStart(2, '0') : ''}`; };
+  function buildRangeBar() {
+    const bar = $('#rangeBar');
+    bar.innerHTML = '';
+    for (const r of RANGES) bar.appendChild(h('button', { class: 'rb-btn', title: `Show ${r[0] === 'All' ? 'all the history' : r[0] === 'YTD' ? 'this year' : 'the last ' + r[0]}`, onclick: () => showRange(r) }, r[0]));
+    const go = h('button', { class: 'rb-btn rb-icon', title: 'Go to date…', onclick: goToDateDialog });
+    go.innerHTML = '<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="1.5"/><path d="M4 10h16M9 3v4M15 3v4M13 15l2 2 3-4"/></svg>';
+    bar.append(h('span', { class: 'rb-sep' }), go, h('span', { class: 'spacer' }));
+    const clock = h('span', { class: 'rb-clock', title: 'Time zone of the chart' });
+    const zone = h('select', { class: 'rb-zone', title: 'Time zone used on the time axis' }, ZONES.map(([v, label]) => h('option', { value: v }, label)));
+    zone.value = state.timeZone || 'local';
+    zone.addEventListener('change', () => setTimeZone(zone.value));
+    const tick = () => { const now = Date.now(), d = new Date(now + CC.tzOffset(now)); clock.textContent = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')} (${utcLabel(now)})`; };
+    tick();
+    setInterval(tick, 1000);
+    bar.append(clock, zone);
+  }
+  function setTimeZone(tz) {
+    state.timeZone = tz;
+    save();
+    CC.setTimeZone(tz);
+    for (const s of slots) { s.chart._legendIdx = -2; s.chart.invalidate(); }
+    const sel = document.querySelector('.rb-zone');
+    if (sel) sel.value = tz;
+  }
+  // load older candles until the chart reaches back to t (a few requests at most)
+  async function ensureHistory(slot, t) {
+    for (let k = 0; k < 12 && slot.chart.raw.length && slot.chart.raw[0].t > t && !slot.noMore && slot.mode === 'live'; k++) {
+      const n = slot.chart.raw.length;
+      await slot.loadOlder();
+      if (slot.chart.raw.length === n) break;
+    }
+  }
+  async function showRange(r) {
+    const slot = active;
+    if (slot.replay) { toast('Exit the replay first.', 'warn'); return; }
+    const sym = slot.symbol;
+    let tf = slot.tf;
+    if (!sym.startsWith('CSV:') && !isDemo(sym)) {
+      tf = MD.supportsTf(sym, r[2]) ? r[2] : MD.nearestTf(sym, r[2]);
+      if (tf !== slot.tf) await slot.load(sym, tf);
+    }
+    const raw = slot.chart.raw;
+    if (!raw.length) return;
+    const now = raw[raw.length - 1].t;
+    const start = r[1] === 'ytd' ? Date.UTC(new Date(now).getUTCFullYear(), 0, 1) : r[1] === 'all' ? 0 : now - r[1];
+    await ensureHistory(slot, start);
+    slot.chart.setVisibleRange(Math.max(start, slot.chart.raw[0].t), now);
+    updateHeader();
+  }
+  function goToDateDialog() {
+    const slot = active;
+    const last = slot.chart.raw.length ? slot.chart.raw[slot.chart.raw.length - 1].t : Date.now();
+    const d0 = new Date(last + CC.tzOffset(last) - 30 * 86400e3);
+    const input = h('input', { type: 'datetime-local', class: 'search', value: d0.toISOString().slice(0, 16) });
+    const go = async () => {
+      if (!input.value) return;
+      // the typed time is in the chart's time zone
+      const wall = Date.parse(input.value + ':00Z');
+      if (!isFinite(wall)) return;
+      const t = wall - CC.tzOffset(wall);
+      m.close();
+      await ensureHistory(slot, t - 50 * slot.chart.rawInterval);
+      if (slot.chart.raw.length && slot.chart.raw[0].t > t) toast('The chart\'s history doesn\'t go back that far.', 'warn', 4000);
+      slot.chart.scrollToTime(t);
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    const m = openModal('Go to date', h('div', {}, input, h('p', { class: 'muted' }, `Time zone: ${ZONES.find((z) => z[0] === (state.timeZone || 'local'))[1]} (${utcLabel()}). Older history loads if needed.`)), {
+      footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: go }, 'Go to')],
+    });
+    setTimeout(() => input.focus(), 0);
+  }
+
+  // ---- chart settings: colors, grid, lines, watermark, time zone (for every chart)
+  function applyLook() {
+    CC.setLook(state.look);
+    for (const s of slots) s.chart.setTheme(state.theme);
+  }
+  function openChartSettings() {
+    const orig = clone(state.look || {}), L = (state.look = clone(orig));
+    const T = CC.THEMES[state.theme] || CC.THEMES.dark;
+    const form = h('div', { class: 'form' });
+    const color = (key, label) => {
+      const inp = h('input', { type: 'color', value: (L[key] || T[key] || '#000000').slice(0, 7) });
+      const reset = h('button', { class: 'btn small-btn', title: 'Theme color', onclick: () => { delete L[key]; inp.value = (T[key] || '#000000').slice(0, 7); applyLook(); } }, 'Reset');
+      inp.addEventListener('input', () => { L[key] = inp.value; applyLook(); });
+      form.appendChild(h('label', {}, h('span', {}, label), h('span', { class: 'tf-pick' }, inp, reset)));
+    };
+    const check = (key, label, dflt = true) => {
+      const cb = h('input', { type: 'checkbox' });
+      cb.checked = L[key] === undefined ? dflt : !!L[key];
+      cb.addEventListener('change', () => { L[key] = cb.checked; applyLook(); });
+      form.appendChild(h('label', {}, h('span', {}, label), cb));
+    };
+    form.appendChild(h('div', { class: 'list-group' }, 'Candles'));
+    color('up', 'Up color');
+    color('down', 'Down color');
+    form.appendChild(h('div', { class: 'list-group' }, 'Background'));
+    color('bg', 'Background');
+    check('hgrid', 'Horizontal grid lines');
+    check('vgrid', 'Vertical grid lines');
+    check('watermark', 'Symbol watermark', false);
+    form.appendChild(h('div', { class: 'list-group' }, 'Price scale'));
+    check('lastLine', 'Last price line');
+    check('countdown', 'Countdown to the candle close');
+    form.appendChild(h('div', { class: 'list-group' }, 'Time'));
+    const zone = h('select', {}, ZONES.map(([v, label]) => h('option', { value: v }, label)));
+    zone.value = state.timeZone || 'local';
+    zone.addEventListener('change', () => setTimeZone(zone.value));
+    form.appendChild(h('label', {}, h('span', {}, 'Time zone'), zone));
+    let ok = false;
+    const m = openModal('Chart settings', form, {
+      footer: [h('button', { class: 'btn ghost', onclick: () => { state.look = {}; applyLook(); save(); m.close(); ok = true; openChartSettings(); } }, 'Defaults'), h('span', { class: 'spacer' }),
+        h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: () => { ok = true; save(); m.close(); } }, 'OK')],
+      onClose: () => { if (!ok) { state.look = orig; applyLook(); } },
+    });
+  }
+
   // ---- Strategy Tester: backtests a strategy script on the active chart's candles
   const BT = window.CandelaBacktest;
   const tester = { slot: null, scriptId: null, result: null, timer: null, error: null };
@@ -3465,6 +3748,11 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   document.addEventListener('keydown', (e) => {
     const typing = e.target.matches('input, select, textarea');
     if (e.key === 'Enter' && !typing && !modalOpen() && active.chart.finishCreating()) { e.preventDefault(); return; } // finish a path / polyline
+    if ((e.ctrlKey || e.metaKey) && !typing && !modalOpen()) {
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoRedo(-1); return; }
+      if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); undoRedo(1); return; }
+    }
     if (e.key === 'ArrowRight' && e.shiftKey && !typing && !modalOpen() && active.replay) { e.preventDefault(); active.pauseReplay(); active.replayStep(); return; }
     if (e.key === 'Escape' && active && active.chart.cancelPick()) { updateHeader(); return; }
     if (e.key === 'Escape') {
@@ -3519,6 +3807,9 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   syncMarkerFeeds();
   probeServer();
   if (state.tester.open) openTester();
+  buildRangeBar();
+  renderObjTree();
+  updateUndoButtons();
   setTimeout(checkForUpdate, 4000);
   setInterval(checkForUpdate, 6 * 3600e3);
   if (!PREVIEW) MD.loadBStocks().then(() => {

@@ -597,3 +597,44 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 @media (max-width: 1700px) {
   #scriptBtn span, #alertBtn span, #replayBtn span, #testerBtn span { display: none; }
 }
+
+/* ---- bottom bar: date ranges, go to date, time zone */
+.chart-wrap .charts { bottom: 30px; }
+.chart-wrap.with-tester .charts { bottom: calc(var(--tester-h, 280px) + 30px); }
+.range-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 30px; display: flex; align-items: center; gap: 2px; padding: 0 8px; background: var(--panel); border-top: 1px solid var(--border); z-index: 6; overflow-x: auto; scrollbar-width: none; }
+.chart-wrap.with-tester .range-bar { bottom: var(--tester-h, 280px); }
+.rb-btn { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; height: 24px; padding: 0 8px; border-radius: 5px; cursor: pointer; flex: none; }
+.rb-btn:hover { background: var(--panel-2); color: var(--text); }
+.rb-icon { display: grid; place-items: center; width: 30px; padding: 0; }
+.rb-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.rb-sep { width: 1px; height: 16px; background: var(--border); margin: 0 6px; flex: none; }
+.rb-clock { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; margin-right: 6px; }
+.rb-zone { height: 24px; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 5px; font-size: 12px; flex: none; }
+
+/* ---- undo / redo buttons */
+#undoBtn:disabled, #redoBtn:disabled { opacity: 0.35; cursor: default; background: transparent; }
+
+/* ---- object tree */
+.obj-tree { position: fixed; left: 56px; top: 56px; z-index: 60; width: 300px; max-height: calc(100vh - 120px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+.ot-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--border); }
+.ot-head .muted { flex: 1; font-size: 12px; }
+.ot-list { overflow-y: auto; padding-bottom: 6px; }
+.ot-group { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 10px 12px 4px; }
+.ot-empty { padding: 2px 12px 6px; font-size: 12px; }
+.ot-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px; cursor: pointer; font-size: 13px; }
+.ot-row:hover { background: var(--panel-2); }
+.ot-row.sel { background: var(--accent-soft); }
+.ot-row.off .ot-name, .ot-row.off .ot-icon { opacity: 0.45; }
+.ot-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; display: block; }
+.ot-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ot-btn { width: 24px; height: 24px; border: 0; background: transparent; color: var(--muted); border-radius: 4px; display: grid; place-items: center; cursor: pointer; padding: 0; opacity: 0; }
+.ot-row:hover .ot-btn, .ot-btn.on { opacity: 1; }
+.ot-btn:hover { background: var(--border); color: var(--text); }
+.ot-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---- saved layouts (layout menu) */
+.saved-row { display: flex; align-items: center; gap: 4px; }
+.saved-name { flex: 1; text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.saved-name:hover { background: var(--panel-2); }
+.saved-x { border: 0; background: transparent; color: var(--muted); width: 24px; height: 24px; border-radius: 4px; cursor: pointer; }
+.saved-x:hover { color: var(--down); background: var(--panel-2); }

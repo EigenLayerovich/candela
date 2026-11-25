@@ -257,9 +257,9 @@ is meant for personal use.
   Supertrend, Parabolic SAR, Ichimoku, RSI, MACD, Stochastic, Stochastic RSI, CCI, Williams %R,
   MFI, ADX/DMI, ATR, OBV, ROC. Every input and color is editable; oscillators get their own
   resizable, reorderable panes.
-- **Drawing tools**: trend line, ray, extended line, arrow, horizontal/vertical line, rectangle,
-  Fibonacci retracement, measure (Δprice, %, bars, time), text. Magnet snapping, color/width/dash,
-  lock, drag to edit. Drawings are saved per symbol.
+- **Drawing tools (75)**: lines, channels, pitchforks, Fibonacci and Gann tools, chart patterns, Elliott
+  waves, cycles, long/short positions, forecasts, volume profiles, measurers, brushes, arrows and shapes;
+  see *Drawing tools* below.
 - **Alerts** with sound, on-screen and desktop notifications, and with the included server also when
   the browser is closed, via phone push (ntfy), Telegram or Discord/Slack webhooks:
   - *Price crossing* a level, for any symbol.
@@ -301,6 +301,38 @@ week shows the daily SMA as of its last day. On a lower-timeframe chart the curr
 with the live price until the day closes, as on other charting apps. It works for oscillators too
 (an RSI on 1D below a 1H chart). Custom scripts always use the chart's timeframe.
 
+## Drawing tools
+
+The left toolbar has five groups. Click a group to use the tool it shows; hover it and click the small
+arrow on its right edge (or right-click it) for the whole menu. A group remembers the tool you picked.
+Star tools (★ in the menus) to collect them under the **heart** button.
+
+- **Lines**: Trend line, Ray, Info line (change, %, bars and angle), Extended line, Trend angle, Horizontal
+  line, Horizontal ray, Vertical line, Crossline. **Channels**: Parallel channel, Regression trend (with
+  ±2 standard deviations), Flat top/bottom, Disjoint channel. **Pitchforks**: Pitchfork, Schiff, Modified
+  Schiff, Inside pitchfork.
+- **Fibonacci**: Retracement, Trend-based extension, Channel, Time zone, Speed resistance fan, Trend-based
+  time, Circles, Spiral, Speed resistance arcs, Wedge, Pitchfan. **Gann**: Box, Square fixed, Square, Fan.
+- **Patterns**: XABCD, Cypher, Head and shoulders, ABCD, Triangle, Three drives (with the ratios between
+  legs). **Elliott waves**: Impulse (1-5), Correction (A-C), Triangle (A-E), Double combo (W-X-Y), Triple
+  combo (W-X-Y-X-Z). **Cycles**: Cyclic lines, Time cycles, Sine line.
+- **Forecasting**: Long and Short position (drag target, stop and end; shows risk/reward and whether the
+  target or the stop was hit), Position forecast, Bars pattern (copies the candles of a range to where you
+  click), Ghost feed (sketch future candles), Sector. **Volume**: Anchored VWAP, Fixed range volume
+  profile, Anchored volume profile (with point of control and the 70% value area). **Measurers**: Price
+  range, Date range, Date and price range.
+- **Brushes**: Brush, Highlighter. **Arrows**: Arrow marker, Arrow, Arrow mark up/down (with optional text).
+  **Shapes**: Rectangle, Rotated rectangle, Path, Circle, Ellipse, Polyline, Triangle, Arc, Curve, Double curve.
+- **Text**.
+
+How to draw: most tools take 2 clicks (or press, drag and release); tools with more points take one click
+per point (a pitchfork 3, XABCD 5, head and shoulders 7). *Path*, *Polyline* and *Ghost feed* take as many
+points as you like: double-click or press Enter to finish. Brushes draw while you hold the mouse button.
+Long/Short position, horizontal and vertical lines, arrow marks and anchored tools take one click. `Esc`
+cancels. Select a drawing to drag it or its points, change its color, width and dash, lock it, or delete it.
+Shortcuts: `Alt+T` trend line, `Alt+H` horizontal line, `Alt+J` horizontal ray, `Alt+V` vertical line,
+`Alt+C` crossline, `Alt+F` Fib retracement, `Alt+M` date and price range, `Alt+Shift+R` rectangle.
+
 ## Line style
 
 In an indicator's settings, the **Style** tab has, for every line: its color, a **thickness** from 1 to 4,
@@ -327,7 +359,8 @@ new version over the old one (quit Candela from the tray first); your charts and
 | Symbol search | just start typing a ticker |
 | Indicators | `/` |
 | Custom timeframe | type a number (`2`, then `D`, Enter = 2 days) |
-| Tools | `Alt+T` trend, `Alt+H` horizontal, `Alt+V` vertical, `Alt+F` fib, `Alt+M` measure |
+| Tools | `Alt+T` trend, `Alt+H` horizontal, `Alt+J` horizontal ray, `Alt+V` vertical, `Alt+C` crossline, `Alt+F` fib, `Alt+M` measure, `Alt+Shift+R` rectangle |
+| Finish a path / polyline | double-click or `Enter` |
 | Alert | `Alt+A`, or right-click the chart → *Add alert at …* |
 | Delete drawing | select it, then `Del` |
 | Focus chart N in a layout | `Alt+1` … `Alt+6` |
@@ -397,7 +430,8 @@ It shows up in the Indicators dialog automatically, with a settings panel genera
 
 ## Files
 
-- `js/chart.js`: canvas chart engine (panes, axes, rendering, crosshair, drawings, interaction)
+- `js/chart.js`: canvas chart engine (panes, axes, rendering, crosshair, interaction)
+- `js/drawings.js`: the drawing tools (each tool's points and how it's drawn; also used for selecting them)
 - `js/indicators.js`: indicator math + definitions
 - `js/script.js`: Candela Script: lexer, parser, checker, interpreter, built-in functions
 - `js/alerts-core.js`: alert rules shared by the browser and the server

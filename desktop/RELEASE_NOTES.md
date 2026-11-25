@@ -1,4 +1,8 @@
-## New in 1.7.0
+## New in 1.8.0
+
+- **75 drawing tools** in five toolbar menus: lines, channels and pitchforks; Fibonacci and Gann; chart patterns, Elliott waves and cycles; long/short positions, forecasts, volume profiles and measurers; brushes, arrows and shapes. Star your favorites to keep them under the heart button.
+
+## In 1.7.0
 
 - **Line style for indicator lines**: thickness 1–4, Line / Line with breaks / Step line / Step line with breaks / Step line with diamonds, and a Price line option (indicator settings → Style).
 - **New version notice**: Candela tells you when a newer release is out, with what's new and a Download button.

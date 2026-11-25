@@ -19,11 +19,7 @@
     },
   };
 
-  const FIB_LEVELS = [
-    [0, '#9AA3B2'], [0.236, '#F7525F'], [0.382, '#F5A623'], [0.5, '#22AB94'],
-    [0.618, '#2EC4B6'], [0.786, '#3D8BFD'], [1, '#9AA3B2'], [1.618, '#9C6ADE'],
-  ];
-  const TWO_POINT = new Set(['trend', 'ray', 'extended', 'rect', 'fib', 'measure', 'arrow']);
+  const DRAW = () => window.CandelaDrawings; // drawing tools (drawings.js)
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -1196,7 +1192,7 @@
       if (p === this.main) {
         if (!this.drawingsHidden) {
           for (const d of this.drawings) {
-            if (d.type === 'hline') this._axisLabel(this.yOf(p, d.pts[0].p), this._fmtMain(d.pts[0].p), d.color || T.drawing, '#fff', p);
+            if (DRAW() && DRAW().TOOLS[d.type] && DRAW().TOOLS[d.type].axis) this._axisLabel(this.yOf(p, d.pts[0].p), this._fmtMain(d.pts[0].p), d.color || T.drawing, '#fff', p);
           }
         }
         for (const al of this.alerts) this._axisLabel(this.yOf(p, al.price), this._fmtMain(al.price), T.alert, '#111', p);
@@ -1299,141 +1295,67 @@
       return { x: x1 + dx * k, y: y1 + dy * k };
     }
 
+    // what drawing tools need from the chart (coordinates, bars, formatting)
+    _dapi() {
+      if (!this._font) this._font = getComputedStyle(this.el).fontFamily;
+      return {
+        theme: this.theme, font: this._font, plotW: this.plotW, plotH: this.H - this.timeH, spacing: this.spacing, bars: this.bars,
+        x: (t) => this.xAt(this.timeToIndex(t)), y: (p) => this.yOf(this.main, p), price: (y) => this.vOf(this.main, y),
+        idx: (t) => this.timeToIndex(t), xi: (i) => this.xAt(i), ti: (i) => this.indexToTime(i), idxAtX: (x) => this.idxAt(x),
+        fmt: (v) => this.fmtPrice(v), dec: this.decimals, compact: fmtCompact, edge: (a, b) => this._edgePoint(a.x, a.y, b.x, b.y),
+      };
+    }
+    _toolPoints(d) { return d.pts.map((pt) => this._pt(pt)); }
+    _handles(d, tool, P, api) { return tool.noHandles ? [] : tool.handles ? tool.handles(P, api, d) : P; }
+
     _drawDrawing(d, selected) {
-      const ctx = this.ctx, T = this.theme, p = this.main;
-      const color = d.color || T.drawing;
-      const pts = d.pts.map((pt) => this._pt(pt));
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color;
-      ctx.lineWidth = d.width || 1.5;
-      ctx.setLineDash(d.dash ? [6, 4] : []);
-      const line = (a, b) => { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); };
-      switch (d.type) {
-        case 'trend': line(pts[0], pts[1]); break;
-        case 'arrow': {
-          line(pts[0], pts[1]);
-          const ang = Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x), L = 12;
-          ctx.beginPath();
-          ctx.moveTo(pts[1].x, pts[1].y);
-          ctx.lineTo(pts[1].x - L * Math.cos(ang - 0.4), pts[1].y - L * Math.sin(ang - 0.4));
-          ctx.lineTo(pts[1].x - L * Math.cos(ang + 0.4), pts[1].y - L * Math.sin(ang + 0.4));
-          ctx.closePath();
-          ctx.fill();
-          break;
-        }
-        case 'ray': line(pts[0], this._edgePoint(pts[0].x, pts[0].y, pts[1].x, pts[1].y)); break;
-        case 'extended': line(this._edgePoint(pts[1].x, pts[1].y, pts[0].x, pts[0].y), this._edgePoint(pts[0].x, pts[0].y, pts[1].x, pts[1].y)); break;
-        case 'hline': line({ x: 0, y: pts[0].y }, { x: this.plotW, y: pts[0].y }); break;
-        case 'vline': line({ x: pts[0].x, y: 0 }, { x: pts[0].x, y: this.H }); break;
-        case 'rect': {
-          const x = Math.min(pts[0].x, pts[1].x), y = Math.min(pts[0].y, pts[1].y), w = Math.abs(pts[1].x - pts[0].x), h = Math.abs(pts[1].y - pts[0].y);
-          ctx.fillStyle = withAlpha(color, 0.14);
-          ctx.fillRect(x, y, w, h);
-          ctx.strokeRect(x, y, w, h);
-          break;
-        }
-        case 'fib': {
-          const [a, b] = d.pts, x1 = Math.min(pts[0].x, pts[1].x), x2 = Math.max(pts[0].x, pts[1].x);
-          ctx.lineWidth = 1;
-          let prevY = null;
-          for (const [lvl, c] of FIB_LEVELS) {
-            const price = b.p + (a.p - b.p) * lvl, y = this.yOf(p, price);
-            if (prevY !== null) { ctx.fillStyle = withAlpha(c, 0.08); ctx.fillRect(x1, Math.min(prevY, y), x2 - x1, Math.abs(y - prevY)); }
-            ctx.strokeStyle = c;
-            line({ x: x1, y }, { x: x2, y });
-            ctx.fillStyle = c;
-            ctx.textAlign = 'right';
-            ctx.fillText(`${lvl} (${this.fmtPrice(price)})`, x1 - 6, y);
-            prevY = y;
-          }
-          ctx.strokeStyle = withAlpha(color, 0.6);
-          ctx.setLineDash([4, 4]);
-          line(pts[0], pts[1]);
-          break;
-        }
-        case 'measure': {
-          const [a, b] = d.pts, up = b.p >= a.p, c = up ? T.up : T.down;
-          const x = Math.min(pts[0].x, pts[1].x), y = Math.min(pts[0].y, pts[1].y), w = Math.abs(pts[1].x - pts[0].x), h = Math.abs(pts[1].y - pts[0].y);
-          ctx.fillStyle = withAlpha(c, 0.16);
-          ctx.fillRect(x, y, w, h);
-          ctx.strokeStyle = c;
-          ctx.lineWidth = 1;
-          line({ x: (pts[0].x + pts[1].x) / 2, y: pts[0].y }, { x: (pts[0].x + pts[1].x) / 2, y: pts[1].y });
-          line({ x: pts[0].x, y: (pts[0].y + pts[1].y) / 2 }, { x: pts[1].x, y: (pts[0].y + pts[1].y) / 2 });
-          const bars = Math.round(this.timeToIndex(b.t) - this.timeToIndex(a.t));
-          const diff = b.p - a.p, pct = (diff / a.p) * 100;
-          const span = Math.abs(b.t - a.t), days = Math.floor(span / 86400e3), hrs = Math.floor((span % 86400e3) / 3600e3), mins = Math.floor((span % 3600e3) / 60e3);
-          const dur = days ? `${days}d ${hrs}h` : hrs ? `${hrs}h ${mins}m` : `${mins}m`;
-          const l1 = `${diff >= 0 ? '+' : ''}${this.fmtPrice(diff)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`, l2 = `${bars} bars, ${dur}`;
-          const tw = Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 16;
-          const bx = (pts[0].x + pts[1].x) / 2 - tw / 2, by = up ? y - 44 : y + h + 6;
-          ctx.fillStyle = c;
-          ctx.fillRect(bx, by, tw, 38);
-          ctx.fillStyle = '#fff';
-          ctx.textAlign = 'center';
-          ctx.fillText(l1, bx + tw / 2, by + 12);
-          ctx.fillText(l2, bx + tw / 2, by + 27);
-          break;
-        }
-        case 'text': {
-          ctx.font = '600 13px ' + getComputedStyle(this.el).fontFamily;
-          ctx.textAlign = 'left';
-          ctx.fillText(d.text || 'Text', pts[0].x, pts[0].y);
-          ctx.font = '11px ' + getComputedStyle(this.el).fontFamily;
-          break;
-        }
-      }
+      const DR = DRAW(), tool = DR && DR.TOOLS[d.type];
+      if (!tool) return;
+      const ctx = this.ctx, api = this._dapi(), P = this._toolPoints(d);
+      ctx.save();
+      const g = DR.pen(ctx, api, d, false);
+      const need = tool.n === 'multi' || tool.n === 0 ? 2 : tool.n;
+      try {
+        if (P.length < need) g.poly(P, { dash: [4, 4] }); // still being placed
+        else tool.draw(g, P, d);
+      } catch (e) { console.error(d.type, e); }
+      ctx.restore();
       ctx.setLineDash([]);
       ctx.lineWidth = 1;
-      if (selected) {
-        for (const pt of pts) {
-          const hx = d.type === 'hline' ? clamp(pt.x, 10, this.plotW - 10) : pt.x, hy = d.type === 'vline' ? clamp(pt.y, 10, this.H - this.timeH - 10) : pt.y;
-          ctx.beginPath();
-          ctx.arc(hx, hy, 5, 0, Math.PI * 2);
-          ctx.fillStyle = T.handleFill;
-          ctx.fill();
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 2;
-          ctx.stroke();
-          ctx.lineWidth = 1;
-        }
+      if (!selected) return;
+      const color = d.color || this.theme.drawing;
+      for (const pt of this._handles(d, tool, P, api)) {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = this.theme.handleFill;
+        ctx.fill();
+        ctx.strokeStyle = DR.alpha(color, 1);
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.lineWidth = 1;
       }
     }
 
     _hitDrawing(x, y) {
       if (this.drawingsHidden) return null;
-      for (let k = this.drawings.length - 1; k >= 0; k--) {
-        const d = this.drawings[k], pts = d.pts.map((pt) => this._pt(pt));
-        for (let h = 0; h < pts.length; h++) {
-          const hx = d.type === 'hline' ? clamp(pts[h].x, 10, this.plotW - 10) : pts[h].x, hy = d.type === 'vline' ? clamp(pts[h].y, 10, this.H - this.timeH - 10) : pts[h].y;
-          if (Math.hypot(x - hx, y - hy) < 8 && d === this.selected) return { d, handle: h };
+      const DR = DRAW();
+      if (!DR) return null;
+      const api = this._dapi();
+      this.ctx.save();
+      try {
+        for (let k = this.drawings.length - 1; k >= 0; k--) {
+          const d = this.drawings[k], tool = DR.TOOLS[d.type];
+          if (!tool) continue;
+          const P = this._toolPoints(d);
+          if (d === this.selected) {
+            const H = this._handles(d, tool, P, api);
+            for (let h = 0; h < H.length; h++) if (Math.hypot(x - H[h].x, y - H[h].y) < 8) return { d, handle: h };
+          }
+          const g = DR.pen(this.ctx, api, d, true);
+          try { tool.draw(g, P, d); } catch (e) { continue; }
+          if (DR.hitTest(g.prims, x, y, Math.max(6, (d.width || 1.5) / 2 + 3))) return { d, handle: -1 };
         }
-        let hit = false;
-        const tol = 6;
-        switch (d.type) {
-          case 'trend': case 'arrow': hit = distToSeg(x, y, pts[0].x, pts[0].y, pts[1].x, pts[1].y) < tol; break;
-          case 'ray': { const e = this._edgePoint(pts[0].x, pts[0].y, pts[1].x, pts[1].y); hit = distToSeg(x, y, pts[0].x, pts[0].y, e.x, e.y) < tol; break; }
-          case 'extended': {
-            const e1 = this._edgePoint(pts[1].x, pts[1].y, pts[0].x, pts[0].y), e2 = this._edgePoint(pts[0].x, pts[0].y, pts[1].x, pts[1].y);
-            hit = distToSeg(x, y, e1.x, e1.y, e2.x, e2.y) < tol; break;
-          }
-          case 'hline': hit = Math.abs(y - pts[0].y) < tol; break;
-          case 'vline': hit = Math.abs(x - pts[0].x) < tol; break;
-          case 'rect': case 'measure': case 'fib': {
-            const x1 = Math.min(pts[0].x, pts[1].x), x2 = Math.max(pts[0].x, pts[1].x), y1 = Math.min(pts[0].y, pts[1].y), y2 = Math.max(pts[0].y, pts[1].y);
-            if (d.type === 'fib') {
-              hit = x >= x1 - tol && x <= x2 + tol && FIB_LEVELS.some(([l]) => Math.abs(y - this.yOf(this.main, d.pts[1].p + (d.pts[0].p - d.pts[1].p) * l)) < tol);
-            } else hit = x >= x1 - tol && x <= x2 + tol && y >= y1 - tol && y <= y2 + tol;
-            break;
-          }
-          case 'text': {
-            const w = this.ctx.measureText(d.text || 'Text').width * 1.2 + 6;
-            hit = x >= pts[0].x - 4 && x <= pts[0].x + w && Math.abs(y - pts[0].y) < 11;
-            break;
-          }
-        }
-        if (hit) return { d, handle: -1 };
-      }
+      } finally { this.ctx.restore(); }
       return null;
     }
 
@@ -1449,6 +1371,8 @@
       }
       return { t: this.indexToTime(idx), p: price };
     }
+
+    _freePoint(x, y) { return { t: this.indexToTime(this.idxAt(x)), p: this.vOf(this.main, y) }; }
 
     setTool(t) {
       this.tool = t;
@@ -1475,14 +1399,35 @@
     _finishCreating() {
       const d = this.creating;
       this.creating = null;
+      this.freehand = false;
       if (!d) return;
-      const a = this._pt(d.pts[0]), b = this._pt(d.pts[1]);
-      if (Math.hypot(a.x - b.x, a.y - b.y) < 3) { this.invalidate(); return; }
+      const tool = DRAW().TOOLS[d.type];
+      // drop repeated points (a double-click places the same point twice)
+      const P = this._toolPoints(d), keep = [];
+      d.pts.forEach((q, i) => { if (!keep.length || Math.hypot(P[i].x - P[keep[keep.length - 1]].x, P[i].y - P[keep[keep.length - 1]].y) > 3 || tool.n !== 'multi') keep.push(i); });
+      d.pts = keep.map((i) => d.pts[i]);
+      const need = tool.n === 'multi' || tool.n === 0 ? 2 : tool.n;
+      const P2 = this._toolPoints(d);
+      const spread = P2.length ? Math.max(...P2.map((q) => Math.hypot(q.x - P2[0].x, q.y - P2[0].y))) : 0;
+      if (d.pts.length < need || spread < 3) { this.invalidate(); return; }
+      if (tool.normalize) tool.normalize(d);
+      this._commitDrawing(d);
+    }
+    // finish a multi-point drawing (path, polyline, ghost feed) from outside: Enter key
+    finishCreating() {
+      if (!this.creating) return false;
+      const tool = DRAW().TOOLS[this.creating.type];
+      if (tool.n === 'multi' && this.creating.pts.length > 2) this.creating.pts.pop(); // the point following the mouse
+      this._finishCreating();
+      return true;
+    }
+    _commitDrawing(d) {
       this.drawings.push(d);
       this.tool = 'cursor';
       this.select(d);
       this.onToolDone();
       this.onDrawingsChange();
+      this.invalidate();
     }
 
     // ------------------------------------------------------------------ input
@@ -1505,14 +1450,28 @@
         this.downAt = { x, y };
         if (reg.r === 'plot' && this.tool !== 'cursor') {
           if (reg.p !== this.main) return;
-          if (this.creating) { this._finishCreating(); return; }
-          const pt = this._pointFromMouse(x, y), base = { id: uid(), type: this.tool, color: null, width: 1.5 };
-          if (TWO_POINT.has(this.tool)) {
+          const tool = DRAW() && DRAW().TOOLS[this.tool];
+          if (!tool) { this.tool = 'cursor'; this.onToolDone(); return; }
+          if (this.creating) {
+            // the next point of a 3+ point or multi-point drawing, or the last one
+            const d = this.creating, pt = this._pointFromMouse(x, y);
+            d.pts[d.pts.length - 1] = pt;
+            if (tool.n === 'multi' || d.pts.length < tool.n) d.pts.push({ ...pt });
+            else this._finishCreating();
+            this.invalidate();
+            return;
+          }
+          const pt = this._pointFromMouse(x, y), base = { id: uid(), type: this.tool, color: tool.color || null, width: tool.width || 1.5 };
+          if (tool.n === 0) { // freehand: follow the mouse while the button is down
+            this.creating = { ...base, pts: [this._freePoint(x, y)] };
+            this.freehand = true;
+          } else if (tool.n !== 1) {
             this.creating = { ...base, pts: [pt, { ...pt }] };
             this.creatingFromDown = true;
           } else {
             const d = { ...base, pts: [pt] };
-            if (this.tool === 'text') {
+            if (tool.init) tool.init(d, this._dapi());
+            if (tool.askText) {
               this.tool = 'cursor';
               this.onToolDone();
               Promise.resolve(this.askText('Note')).then((txt) => {
@@ -1525,11 +1484,7 @@
               });
               return;
             }
-            this.drawings.push(d);
-            this.tool = 'cursor';
-            this.select(d);
-            this.onToolDone();
-            this.onDrawingsChange();
+            this._commitDrawing(d);
           }
           this.invalidate();
           return;
@@ -1568,7 +1523,11 @@
         this.hover = { x, y, pane: reg.r === 'plot' || reg.r === 'price' ? reg.p : null };
         const dr = this.drag;
         if (this.creating) {
-          this.creating.pts[1] = this._pointFromMouse(x, y);
+          const pts = this.creating.pts;
+          if (this.freehand) {
+            const last = this._pt(pts[pts.length - 1]);
+            if (Math.hypot(x - last.x, y - last.y) >= 3) pts.push(this._freePoint(x, y));
+          } else pts[pts.length - 1] = this._pointFromMouse(x, y);
         } else if (dr) {
           switch (dr.kind) {
             case 'pan': {
@@ -1604,6 +1563,8 @@
             }
             case 'handle': {
               dr.d.pts[dr.h] = this._pointFromMouse(x, y);
+              const tl = DRAW().TOOLS[dr.d.type];
+              if (tl && tl.normalize) tl.normalize(dr.d);
               break;
             }
             case 'drawing': {
@@ -1633,10 +1594,15 @@
       const end = (e) => {
         const dr = this.drag;
         this.drag = null;
-        if (this.creating && this.creatingFromDown && this.downAt) {
+        if (this.creating && this.freehand) this._finishCreating();
+        else if (this.creating && this.creatingFromDown && this.downAt) {
           const { x, y } = pos(e);
           this.creatingFromDown = false;
-          if (Math.hypot(x - this.downAt.x, y - this.downAt.y) > 8) this._finishCreating(); // press-drag-release
+          if (Math.hypot(x - this.downAt.x, y - this.downAt.y) > 8) { // press-drag-release places the second point
+            const tl = DRAW().TOOLS[this.creating.type];
+            if (tl.n === 2) this._finishCreating();
+            else this.creating.pts.push({ ...this.creating.pts[this.creating.pts.length - 1] });
+          }
         }
         if (dr && (dr.kind === 'handle' || dr.kind === 'drawing')) this.onDrawingsChange();
         if (dr && dr.kind === 'divider') this.onLayoutChange();
@@ -1657,9 +1623,10 @@
         const { x, y } = pos(e), reg = this._region(x, y);
         if (reg.r === 'price' && reg.p) { reg.p.auto = true; this.invalidate(); }
         else if (reg.r === 'time') this.resetView();
+        else if (this.creating && DRAW().TOOLS[this.creating.type].n === 'multi') this.finishCreating();
         else if (reg.r === 'plot' && reg.p === this.main) {
           const hit = this._hitDrawing(x, y);
-          if (hit && hit.d.type === 'text') {
+          if (hit && (hit.d.type === 'text' || hit.d.type === 'arrowup' || hit.d.type === 'arrowdown')) {
             Promise.resolve(this.askText(hit.d.text)).then((txt) => {
               if (txt) { hit.d.text = txt; this.onDrawingsChange(); this.invalidate(); }
             });

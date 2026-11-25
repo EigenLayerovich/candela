@@ -515,3 +515,24 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .update-notes { white-space: pre-line; font-size: 12px; margin: 8px 0 0; max-height: 160px; overflow: auto; line-height: 1.45; }
 .update-note p { font-size: 12px; margin: 8px 0 10px; }
 .update-btns { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+
+/* ---- drawing tool groups and their menus */
+.tool-group { position: relative; }
+.tool-more { position: absolute; right: 0; top: 0; bottom: 0; width: 9px; border-radius: 0 6px 6px 0; display: none; cursor: pointer; }
+.tool-more::after { content: ""; position: absolute; right: 2px; top: 50%; margin-top: -3px; border-top: 3px solid transparent; border-bottom: 3px solid transparent; border-left: 4px solid var(--muted); }
+.tool-group:hover .tool-more { display: block; background: var(--panel-2); }
+.tool-group:hover .tool-more:hover::after { border-left-color: var(--accent); }
+.tool-menu { position: fixed; z-index: 90; width: 300px; max-height: calc(100vh - 16px); overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 4px 0 6px; }
+.tm-head { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 10px 14px 4px; }
+.tm-head:not(:first-child) { border-top: 1px solid var(--border); margin-top: 4px; }
+.tm-empty { padding: 4px 14px 8px; font-size: 12px; }
+.tm-item { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; background: transparent; color: var(--text); padding: 6px 10px 6px 14px; font: inherit; text-align: left; cursor: pointer; }
+.tm-item:hover { background: var(--panel-2); }
+.tm-item.on { color: var(--accent); background: var(--accent-soft); }
+.tm-item svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.tm-name { flex: 1; }
+.tm-key { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.tm-star { border: 0; background: transparent; color: var(--muted); font-size: 14px; line-height: 1; width: 22px; height: 22px; border-radius: 4px; cursor: pointer; opacity: 0; padding: 0; }
+.tm-item:hover .tm-star, .tm-star.on { opacity: 1; }
+.tm-star.on { color: #F5A623; }
+.tm-star:hover { background: var(--border); }

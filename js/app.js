@@ -99,6 +99,8 @@
     serverDeletes: [], serverScriptDeletes: [], // changes to send to the alert server when it is back
     exNotes: {}, searchSrc: 'ALL', showAcross: true,
     customTfs: [], // your own timeframes: "2d", "3h", "2w"…
+    toolGroups: {}, // the tool each toolbar group shows (the last one used)
+    favTools: [], // starred drawing tools (the heart menu)
     watchlist: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'LINKUSDT', 'AVAXUSDT', 'LTCUSDT'],
   };
   function loadState() {
@@ -634,14 +636,16 @@
       const changed = () => { c.invalidate(); c.onDrawingsChange(); };
       const color = h('input', { type: 'color', title: 'Color', value: toHex(d.color || c.theme.drawing) });
       color.addEventListener('input', () => { d.color = color.value; changed(); });
-      const width = h('select', { title: 'Line width' }, [1, 1.5, 2, 3, 4].map((w) => h('option', { value: w, selected: (d.width || 1.5) === w }, w + 'px')));
+      const widths = [...new Set([1, 1.5, 2, 3, 4, d.width || 1.5])].sort((a, b) => a - b);
+      const width = h('select', { title: 'Line width' }, widths.map((w) => h('option', { value: w, selected: (d.width || 1.5) === w }, w + 'px')));
       width.addEventListener('change', () => { d.width = +width.value; changed(); });
       const dash = h('button', { class: 'db-btn' + (d.dash ? ' active' : ''), title: 'Dashed' }, '- -');
       dash.addEventListener('click', () => { d.dash = !d.dash; dash.classList.toggle('active', d.dash); changed(); });
       const lock = h('button', { class: 'db-btn' + (d.locked ? ' active' : ''), title: 'Lock position' }, d.locked ? 'Locked' : 'Lock');
       lock.addEventListener('click', () => { d.locked = !d.locked; lock.classList.toggle('active', d.locked); lock.textContent = d.locked ? 'Locked' : 'Lock'; changed(); });
       const kids = [color, width, dash, lock];
-      if (d.type === 'hline') kids.push(h('button', { class: 'db-btn', title: 'Create a price alert at this line', onclick: () => addAlert(this.symbol, d.pts[0].p) }, 'Alert'));
+      if (['hline', 'hray', 'crossline'].includes(d.type)) kids.push(h('button', { class: 'db-btn', title: 'Create a price alert at this line', onclick: () => addAlert(this.symbol, d.pts[0].p) }, 'Alert'));
+      if (d.type === 'arrowup' || d.type === 'arrowdown') kids.push(h('button', { class: 'db-btn', onclick: async () => { const t = await askText('Label', d.text || '', 'Optional text'); if (t !== null && t !== undefined) { d.text = t; changed(); } } }, d.text ? 'Edit text' : 'Add text'));
       if (d.type === 'text') kids.push(h('button', { class: 'db-btn', onclick: async () => { const t = await askText('Text note', d.text); if (t) { d.text = t; changed(); } } }, 'Edit'));
       const del = h('button', { class: 'db-btn danger', title: 'Delete (Del)', onclick: () => c.deleteSelected() });
       del.innerHTML = svg('trash');
@@ -1145,20 +1149,41 @@
     trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
   };
   const svg = (k) => `<svg viewBox="0 0 24 24">${ICONS[k]}</svg>`;
-  const TOOLS = [
-    ['cursor', 'Cursor (Esc)'], ['trend', 'Trend line (Alt+T)'], ['ray', 'Ray'], ['extended', 'Extended line'], ['arrow', 'Arrow'],
-    ['hline', 'Horizontal line (Alt+H)'], ['vline', 'Vertical line (Alt+V)'], ['rect', 'Rectangle'],
-    ['fib', 'Fib retracement (Alt+F)'], ['measure', 'Measure (Alt+M)'], ['text', 'Text note'],
-  ];
+  // Drawing tools come from drawings.js: five groups with fly-out menus, plus Text and favorites.
+  const DR = window.CandelaDrawings;
+  const toolSvg = (k) => `<svg viewBox="0 0 24 24">${DR.ICONS[k] || ICONS[k] || ''}</svg>`;
+  const toolName = (k) => (DR.TOOLS[k] ? DR.TOOLS[k].name : k);
+  const groupOf = (k) => DR.GROUPS.find((g) => g.sections.some(([, ids]) => ids.includes(k)));
+  const groupTool = (g) => { const k = state.toolGroups[g.id]; return DR.TOOLS[k] && groupOf(k) === g ? k : g.sections[0][1][0]; };
+  const HEART = '<path d="M12 20s-7-4.4-9-9.1C1.7 7.6 4 4.5 7.2 4.5c2 0 3.6 1.2 4.8 2.9 1.2-1.7 2.8-2.9 4.8-2.9 3.2 0 5.5 3.1 4.2 6.4C19 15.6 12 20 12 20z"/>';
   let drawingsHidden = false;
 
   function buildToolbar() {
     const tb = $('#toolbar');
-    for (const [k, title] of TOOLS) {
-      const b = h('button', { class: 'tool', 'data-tool': k, title, onclick: () => setActiveTool(k) });
-      b.innerHTML = svg(k);
+    const cur = h('button', { class: 'tool', 'data-tool': 'cursor', title: 'Cursor (Esc)', onclick: () => setActiveTool('cursor') });
+    cur.innerHTML = svg('cursor');
+    tb.appendChild(cur);
+    for (const g of DR.GROUPS) {
+      const k = groupTool(g);
+      const b = h('button', { class: 'tool tool-group', 'data-group': g.id, 'data-tool': k, title: toolTitle(k), onclick: (e) => {
+        if (e.target.closest('.tool-more')) return;
+        setActiveTool(b.dataset.tool);
+      }, oncontextmenu: (e) => { e.preventDefault(); openToolMenu(g, b); } });
+      b.innerHTML = toolSvg(k);
+      const more = h('span', { class: 'tool-more', title: g.title, onclick: (e) => { e.stopPropagation(); openToolMenu(g, b); } });
+      b.appendChild(more);
+      // touch: press and hold opens the menu
+      let hold = null;
+      b.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') hold = setTimeout(() => openToolMenu(g, b), 450); });
+      b.addEventListener('pointerup', () => clearTimeout(hold));
+      b.addEventListener('pointerleave', () => clearTimeout(hold));
       tb.appendChild(b);
     }
+    const txt = h('button', { class: 'tool', 'data-tool': 'text', title: 'Text', onclick: () => setActiveTool('text') });
+    txt.innerHTML = toolSvg('text');
+    const fav = h('button', { class: 'tool', id: 'favBtn', title: 'Favorite tools (star them in the menus)', onclick: () => openToolMenu(null, fav) });
+    fav.innerHTML = `<svg viewBox="0 0 24 24">${HEART}</svg>`;
+    tb.append(txt, fav);
     tb.appendChild(h('div', { class: 'tb-sep' }));
     const mag = h('button', { class: 'tool', id: 'magnetBtn', title: 'Magnet: snap to OHLC', onclick: () => {
       state.magnet = !state.magnet;
@@ -1179,9 +1204,57 @@
     tb.append(mag, hide, trash);
   }
 
+  const toolTitle = (k) => toolName(k) + (DR.TOOLS[k] && DR.TOOLS[k].key ? ` (${DR.TOOLS[k].key})` : '') + (DR.TOOLS[k] && DR.TOOLS[k].n === 'multi' ? ': click points, double-click to finish' : '');
+
   function setActiveTool(k) {
     if (active && active.chart.tool !== k) active.chart.setTool(k);
+    // the group button shows the tool picked last
+    const g = groupOf(k);
+    if (g) {
+      if (state.toolGroups[g.id] !== k) { state.toolGroups[g.id] = k; save(); }
+      const b = document.querySelector(`#toolbar .tool-group[data-group="${g.id}"]`);
+      if (b && b.dataset.tool !== k) {
+        b.dataset.tool = k;
+        b.title = toolTitle(k);
+        b.firstElementChild.outerHTML = toolSvg(k);
+      }
+    }
     for (const b of document.querySelectorAll('#toolbar .tool[data-tool]')) b.classList.toggle('active', b.dataset.tool === k);
+    closeToolMenu();
+  }
+
+  // the fly-out menu of a group (or of your favorites when g is null)
+  function closeToolMenu() { document.querySelector('.tool-menu')?.remove(); }
+  function openToolMenu(g, anchor) {
+    const was = document.querySelector('.tool-menu');
+    closeToolMenu();
+    if (was && was.dataset.for === (g ? g.id : 'fav')) return; // second click closes
+    const menu = h('div', { class: 'tool-menu', role: 'menu', 'data-for': g ? g.id : 'fav' });
+    const sections = g ? g.sections : [['Favorites', state.favTools.filter((k) => DR.TOOLS[k])]];
+    for (const [title, ids] of sections) {
+      menu.appendChild(h('div', { class: 'tm-head' }, title));
+      if (!ids.length) menu.appendChild(h('div', { class: 'tm-empty muted' }, 'Star a tool in one of the menus to keep it here.'));
+      for (const k of ids) {
+        const t = DR.TOOLS[k], starred = state.favTools.includes(k);
+        const star = h('button', { class: 'tm-star' + (starred ? ' on' : ''), title: starred ? 'Remove from favorites' : 'Add to favorites', onclick: (e) => {
+          e.stopPropagation();
+          state.favTools = state.favTools.includes(k) ? state.favTools.filter((x) => x !== k) : [...state.favTools, k];
+          save();
+          star.classList.toggle('on', state.favTools.includes(k));
+          if (!g) { closeToolMenu(); openToolMenu(null, anchor); }
+        } }, '★');
+        const item = h('button', { class: 'tm-item' + (active && active.chart.tool === k ? ' on' : ''), role: 'menuitem', onclick: () => setActiveTool(k) });
+        item.innerHTML = toolSvg(k);
+        item.append(h('span', { class: 'tm-name' }, t.name), h('span', { class: 'tm-key' }, t.key || ''), star);
+        menu.appendChild(item);
+      }
+    }
+    document.body.appendChild(menu);
+    const r = anchor.getBoundingClientRect(), mh = menu.offsetHeight;
+    menu.style.left = r.right + 6 + 'px';
+    menu.style.top = Math.max(8, Math.min(r.top, window.innerHeight - mh - 8)) + 'px';
+    const away = (e) => { if (!menu.contains(e.target) && !anchor.contains(e.target)) { closeToolMenu(); document.removeEventListener('mousedown', away, true); } };
+    setTimeout(() => document.addEventListener('mousedown', away, true), 0);
   }
 
   async function removeAllDrawings() {
@@ -2994,7 +3067,9 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
 
   document.addEventListener('keydown', (e) => {
     const typing = e.target.matches('input, select, textarea');
+    if (e.key === 'Enter' && !typing && !modalOpen() && active.chart.finishCreating()) { e.preventDefault(); return; } // finish a path / polyline
     if (e.key === 'Escape') {
+      if (document.querySelector('.tool-menu')) { closeToolMenu(); return; }
       if (modalOpen()) { $('#modalRoot .backdrop')._close(); return; }
       hideMenus();
       if (!active.chart.cancelCreating()) active.chart.select(null);
@@ -3004,7 +3079,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (typing || modalOpen()) return;
     if ((e.key === 'Delete' || e.key === 'Backspace') && active.chart.selected) { active.chart.deleteSelected(); e.preventDefault(); return; }
     if (e.altKey) {
-      const map = { KeyT: 'trend', KeyH: 'hline', KeyV: 'vline', KeyF: 'fib', KeyM: 'measure' };
+      const map = { KeyT: 'trend', KeyH: 'hline', KeyV: 'vline', KeyF: 'fib', KeyM: 'measure', KeyJ: 'hray', KeyC: 'crossline' };
+      if (e.shiftKey && e.code === 'KeyR') { setActiveTool('rect'); e.preventDefault(); return; }
       if (map[e.code]) { setActiveTool(map[e.code]); e.preventDefault(); return; }
       if (e.code === 'KeyA') { openAlertDialog(); e.preventDefault(); return; }
       if (e.code === 'KeyR') { active.chart.resetView(); e.preventDefault(); return; }

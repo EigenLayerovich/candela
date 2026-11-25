@@ -250,7 +250,8 @@ is meant for personal use.
   different-priced assets line up; each comparison has its own color and can be hidden or removed from
   the legend. Works with imported CSV data too (e.g. a stock vs BTC). The **%** button turns on the
   percent scale without comparing.
-- **Chart types**: candles, hollow candles, Heikin Ashi, OHLC bars, line, area. Log scale.
+- **Chart types**: candles, hollow candles, Heikin Ashi, bars, line, area, and **Renko, Kagi and Point &
+  Figure** (see below)
 - **Custom indicators** with Candela Script, a small language with an editor, examples and reference
   (see below).
 - **Indicators (22)**: Volume, SMA, EMA, WMA, MA Ribbon, Bollinger Bands, Keltner, Donchian, VWAP,
@@ -300,6 +301,23 @@ candle that started before it ended. On a 4H chart a daily SMA steps once a day;
 week shows the daily SMA as of its last day. On a lower-timeframe chart the current day's value moves
 with the live price until the day closes, as on other charting apps. It works for oscillators too
 (an RSI on 1D below a 1H chart). Custom scripts always use the chart's timeframe.
+
+## Renko, Kagi and Point & Figure
+
+Pick them in the chart-type menu. They ignore time: a new brick, line or column appears only when the
+price moves enough, so quiet periods take no space. They're built from the closes of the chart's
+timeframe (a 1H Renko chart uses 1-hour closes).
+
+- **Renko**: a brick each time the close moves a full box beyond the last brick; two boxes to turn around.
+- **Kagi**: a line that turns when price reverses by the reversal amount; thick and green (yang) after it
+  rises above the previous high, thin and red (yin) after it falls below the previous low.
+- **Point & Figure**: columns of X (rising) and O (falling), one mark per box; a new column after the
+  reversal number of boxes (3 by default).
+
+**Box…** next to the menu sets the size: *Auto* uses the 14-bar Average True Range rounded to a round
+number (shown in the title, e.g. `Renko · box 500 (ATR 14)`), or a fixed size; Kagi can also reverse by a
+percentage. Indicators, comparisons and drawings follow the bricks, as on other charting apps. Alerts keep
+using the real candles, so they behave the same whatever the chart type.
 
 ## Drawing tools
 

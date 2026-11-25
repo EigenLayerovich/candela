@@ -1,4 +1,8 @@
-## New in 1.8.0
+## New in 1.9.0
+
+- **Renko, Kagi and Point & Figure** chart types (with Auto/fixed box size and reversal under *Box…*). Heikin Ashi was already there.
+
+## In 1.8.0
 
 - **75 drawing tools** in five toolbar menus: lines, channels and pitchforks; Fibonacci and Gann; chart patterns, Elliott waves and cycles; long/short positions, forecasts, volume profiles and measurers; brushes, arrows and shapes. Star your favorites to keep them under the heart button.
 

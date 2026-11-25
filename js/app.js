@@ -186,6 +186,7 @@
       c.magnet = state.magnet;
       c.main.log = !!cfg.log;
       c.chartType = cfg.chartType || 'candles';
+      c.brickOpts = clone(cfg.brick || {}); // Renko / Kagi / P&F box size and reversal
       for (const s of cfg.indicators || []) {
         const def = resolveDef(s.type);
         if (def) c.addIndicator(def, s.params || {}, { colors: s.colors, visible: s.visible, weight: s.weight, tf: s.tf, styles: s.styles });
@@ -307,7 +308,7 @@
       if (f.local) {
         // simulated or imported data: only longer timeframes, built from the chart's own candles
         if (MD.TF[tf] <= c.interval) c.setTfSource(tf, null, `${tfName(tf)} needs live data (this chart's data is ${this.mode === 'csv' ? 'imported' : 'simulated'})`);
-        else { f.bars = MD.resample(c.bars, tf); c.setTfSource(tf, f.bars); }
+        else { f.bars = MD.resample(c.raw, tf); c.setTfSource(tf, f.bars); }
         return;
       }
       if (!MD.supportsTf(sym, tf)) { c.setTfSource(tf, null, `${tfName(tf)} isn't available for ${bare(sym)}`); return; }
@@ -340,7 +341,7 @@
       const stock = isStock(this.symbol);
       try {
         for (let k = 0; k < (stock ? 1 : 12) && !f.noMore && !f.dead && f.bars.length; k++) {
-          const main = this.chart.bars;
+          const main = this.chart.raw;
           if (!main.length || f.bars[0].t <= main[0].t - 300 * MD.TF[f.tf]) break;
           let older;
           try { older = await MD.history(this.symbol, f.tf, { limit: stock ? 5000 : 1000, endTime: f.bars[0].t - 1 }); } catch (e) { break; }
@@ -353,7 +354,7 @@
       } finally { f.filling = false; }
     }
     refreshLocalTfs() {
-      for (const f of this.tfFeeds.values()) if (f.local && f.bars.length) { f.bars = MD.resample(this.chart.bars, f.tf); this.chart.setTfSource(f.tf, f.bars); }
+      for (const f of this.tfFeeds.values()) if (f.local && f.bars.length) { f.bars = MD.resample(this.chart.raw, f.tf); this.chart.setTfSource(f.tf, f.bars); }
     }
 
     title() {
@@ -461,7 +462,7 @@
         this.stop = MD.stream(sym, tf, (b) => this.onBar(b), (s, detail) => { if (gen === this.gen) this.setStatus(s, detail); });
       } else if (this.mode === 'demo') {
         c.live = true;
-        this.stop = MD.demoStream(tf, () => c.bars[c.bars.length - 1], (b) => this.onBar(b));
+        this.stop = MD.demoStream(tf, () => c.raw[c.raw.length - 1], (b) => this.onBar(b));
         this.setStatus('demo');
       } else this.setStatus('static');
       const last = bars[bars.length - 1];
@@ -484,23 +485,23 @@
     }
 
     onBar(bar) {
-      const n = this.chart.bars.length;
-      this.chart.updateBar(bar);
-      if (this.chart.bars.length !== n) this.alignCompares();
+      const c = this.chart, n = c.raw.length, shown = c.bars.length;
+      c.updateBar(bar);
+      if (c.bars.length !== shown) this.alignCompares();
       if (this.mode !== 'live') this.refreshLocalTfs();
-      markerAlertsOnChartBar(this, this.chart.bars.length !== n);
+      markerAlertsOnChartBar(this, c.raw.length !== n);
       checkAlerts(this.symbol, bar.c);
       if (this === active) updateDocTitle();
     }
 
     async loadOlder() {
       const c = this.chart;
-      if (this.loadingOlder || this.noMore || this.mode !== 'live' || !c.bars.length || c.bars.length >= 30000) return;
+      if (this.loadingOlder || this.noMore || this.mode !== 'live' || !c.raw.length || c.raw.length >= 30000) return;
       this.loadingOlder = true;
       const gen = this.gen;
       try {
         const limit = isStock(this.symbol) ? 5000 : 1000; // stocks: one request costs the same however many bars
-        const older = await MD.history(this.symbol, this.tf, { limit, endTime: c.bars[0].t - 1 });
+        const older = await MD.history(this.symbol, this.tf, { limit, endTime: c.raw[0].t - 1 });
         if (gen !== this.gen) return;
         if (older.length < limit) this.noMore = true;
         if (older.length) {
@@ -600,7 +601,7 @@
 
     // fetch older comparison bars until they cover the chart's first bar
     async fillCompareHistory(st) {
-      const main = this.chart.bars;
+      const main = this.chart.raw;
       const stock = isStock(st.c.symbol), limit = stock ? 5000 : 1000;
       for (let k = 0; k < (stock ? 3 : 30) && !st.noMore && st.bars.length && main.length && st.bars[0].t > main[0].t; k++) {
         try {
@@ -898,7 +899,7 @@
 
   function updateDocTitle() {
     if (!active) return;
-    const b = active.chart.bars[active.chart.bars.length - 1];
+    const b = active.chart.raw[active.chart.raw.length - 1];
     document.title = b ? `${bare(active.symbol)} ${active.chart.fmtPrice(b.c)} — Candela` : 'Candela Charts';
   }
 
@@ -1019,8 +1020,15 @@
       active.cfg.chartType = e.target.value;
       active.chart.setChartType(e.target.value);
       save();
+      updateHeader();
       e.target.blur();
+      if (active.chart.isBrick && !state.brickNoteSeen) {
+        state.brickNoteSeen = true;
+        save();
+        toast('Renko, Kagi and Point & Figure ignore time: a new brick, line or column appears only when price moves enough. Indicators and drawings follow them. "Box…" next to the menu sets the size.', 'info', 9000);
+      }
     });
+    $('#brickBtn').addEventListener('click', openBrickSettings);
     $('#indBtn').addEventListener('click', openIndicatorPicker);
     $('#scriptBtn').addEventListener('click', () => openScriptEditor());
     $('#compareBtn').addEventListener('click', () => openCompareSearch());
@@ -1072,6 +1080,7 @@
     more.classList.toggle('active', inMore);
     more.classList.toggle('wide', inMore && tfName(tf).length > 3);
     $('#chartType').value = active.cfg.chartType || 'candles';
+    $('#brickBtn').hidden = !active.chart.isBrick;
     $('#logBtn').classList.toggle('active', !!active.cfg.log);
     const comparing = active.chart.compares.some((c) => c.visible);
     $('#pctBtn').classList.toggle('active', comparing || !!active.cfg.percent);
@@ -1082,6 +1091,58 @@
     $('#sideBtn').classList.toggle('active', state.sideOpen);
     for (const r of document.querySelectorAll('.wl-row')) r.classList.toggle('active', r.dataset.sym === sym);
     updateAcross();
+  }
+
+  // ---- Renko / Kagi / Point & Figure settings: box size (Auto = 14-bar ATR, or fixed), reversal
+  function openBrickSettings() {
+    const slot = active, c = slot.chart, type = slot.cfg.chartType;
+    if (!c.isBrick) return;
+    const orig = clone(slot.cfg.brick || {}), all = clone(orig), o = all[type] || (all[type] = {});
+    const apply = () => { c.setBrickOptions(all); };
+    const auto = c.brickSize;
+    const form = h('div', { class: 'form' });
+    const num = (value, step) => h('input', { type: 'number', value, min: 0, step: step || 'any' });
+    const row = (label, ...ctl) => form.appendChild(h('label', {}, h('span', {}, label), h('span', { class: 'tf-pick' }, ...ctl)));
+    if (type === 'renko' || type === 'pnf') {
+      const mode = h('select', {}, h('option', { value: 'atr' }, 'Auto (ATR 14)'), h('option', { value: 'fixed' }, 'Fixed'));
+      const size = num(o.size || +(auto || 0).toPrecision(4));
+      mode.value = o.mode === 'fixed' ? 'fixed' : 'atr';
+      const sync = () => { size.disabled = mode.value !== 'fixed'; o.mode = mode.value; if (mode.value === 'fixed') o.size = +size.value; apply(); };
+      mode.addEventListener('change', sync);
+      size.addEventListener('input', () => { if (+size.value > 0) { o.size = +size.value; apply(); } });
+      row('Box size', mode, size);
+      size.disabled = mode.value !== 'fixed';
+      if (type === 'pnf') {
+        const rev = num(o.rev || 3, 1);
+        rev.addEventListener('input', () => { if (+rev.value >= 1) { o.rev = Math.round(+rev.value); apply(); } });
+        row('Reversal (boxes)', rev);
+      }
+    } else {
+      const mode = h('select', {}, h('option', { value: 'atr' }, 'Auto (ATR 14)'), h('option', { value: 'pct' }, 'Percent'), h('option', { value: 'fixed' }, 'Fixed price'));
+      mode.value = o.mode || 'atr';
+      const value = num(o.value || (mode.value === 'pct' ? 1 : +(auto || 0).toPrecision(4)));
+      const sync = () => {
+        o.mode = mode.value;
+        value.disabled = mode.value === 'atr';
+        if (mode.value === 'pct' && !(o.value > 0 && o.value < 100)) value.value = 1;
+        if (mode.value !== 'atr') o.value = +value.value;
+        apply();
+      };
+      mode.addEventListener('change', sync);
+      value.addEventListener('input', () => { if (+value.value > 0) { o.value = +value.value; apply(); } });
+      value.disabled = mode.value === 'atr';
+      row('Reversal', mode, value);
+    }
+    form.appendChild(h('p', { class: 'muted' }, type === 'renko'
+      ? 'A new brick when the close moves one box beyond the last brick; it takes two boxes to turn around.'
+      : type === 'kagi' ? 'The line turns when price reverses by this amount. It is thick and green after rising above the previous high, thin and red after falling below the previous low.'
+        : 'An X for each box price rises, an O for each box it falls; a new column after the reversal number of boxes.'));
+    let ok = false;
+    const m = openModal({ renko: 'Renko', kagi: 'Kagi', pnf: 'Point & Figure' }[type] + ' settings', form, {
+      footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: () => { ok = true; slot.cfg.brick = all; save(); m.close(); } }, 'OK')],
+      onClose: () => { if (!ok) c.setBrickOptions(orig); },
+    });
   }
 
   // ---- layout menu
@@ -2079,7 +2140,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       status.innerHTML = '';
       try {
         const def = CS.compile(ta.value, cur.id || 'draft');
-        const testBars = active && active.chart.bars.length ? active.chart.bars : MD.demoBars('1h', 500);
+        const testBars = active && active.chart.raw.length ? active.chart.raw : MD.demoBars('1h', 500);
         const t0 = performance.now();
         def.calc(testBars, IND.defaults(def));
         const ms = performance.now() - t0;
@@ -2485,7 +2546,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     };
     state.alerts.push(a);
     // record the markers already on the chart so only new ones fire
-    if (slot.chart.bars.length) evaluateMarkerAlert(a, slot.chart.bars, true);
+    if (slot.chart.raw.length) evaluateMarkerAlert(a, slot.chart.raw, true);
     registerAlert(a);
     toast(`Alert set: ${alertTitle(a)}`, 'info');
     askNotificationPermission();
@@ -2494,7 +2555,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   // preset: { ind, markKey } to open the dialog on a script's marker (from the legend bell)
   function openAlertDialog(price, preset) {
     const slot = active, chart = slot.chart;
-    const last = chart.bars[chart.bars.length - 1];
+    const last = chart.raw[chart.raw.length - 1];
     const p = price ?? (last ? last.c : 0);
     const markers = chartMarkers(chart);
     const cond = h('select', { id: 'alertCond' },
@@ -2940,13 +3001,13 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (!isDemo(slot.symbol)) return;
     const list = alertsFor(slot.symbol, slot.tf);
     if (!list.length) return;
-    const run = () => { chartChecks.delete(slot); for (const a of alertsFor(slot.symbol, slot.tf)) evaluateMarkerAlert(a, slot.chart.bars, false); };
+    const run = () => { chartChecks.delete(slot); for (const a of alertsFor(slot.symbol, slot.tf)) evaluateMarkerAlert(a, slot.chart.raw, false); };
     if (newBar) { clearTimeout(chartChecks.get(slot)); run(); }
     else if (!chartChecks.has(slot)) chartChecks.set(slot, setTimeout(run, 1000));
   }
   function primeChartAlerts(slot) {
     if (!isDemo(slot.symbol)) return;
-    for (const a of alertsFor(slot.symbol, slot.tf)) evaluateMarkerAlert(a, slot.chart.bars, true);
+    for (const a of alertsFor(slot.symbol, slot.tf)) evaluateMarkerAlert(a, slot.chart.raw, true);
   }
 
   // prime = record the markers already present so only new ones fire

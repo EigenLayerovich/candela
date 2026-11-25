@@ -79,6 +79,92 @@
     return out;
   }
 
+  // ---- Renko, Kagi and Point & Figure: built from the closes, ignoring time. Each brick, Kagi line or P&F
+  // column becomes one "bar" of the chart, stamped with the time it formed.
+  const BRICK_TYPES = new Set(['renko', 'kagi', 'pnf']);
+  function niceSize(v) {
+    if (!(v > 0)) return 0;
+    const e = Math.pow(10, Math.floor(Math.log10(v))), m = v / e;
+    return (m < 1.5 ? 1 : m < 2.25 ? 2 : m < 3.5 ? 2.5 : m < 7.5 ? 5 : 10) * e;
+  }
+  // the "Auto" box size: the latest 14-bar Average True Range, rounded to a round number
+  function atrSize(raw, len = 14) {
+    const a = window.Indicators.fn.atr(raw, len);
+    for (let i = a.length - 1; i >= 0; i--) if (isFinite(a[i]) && a[i] > 0) return niceSize(a[i]);
+    return niceSize(raw.length ? raw[raw.length - 1].c * 0.01 : 1);
+  }
+  // Renko: a new brick each time the close moves a full box beyond the last brick (two boxes to reverse)
+  function renko(raw, box) {
+    const out = [];
+    if (!raw.length || !(box > 0)) return out;
+    let top = Math.round(raw[0].c / box) * box, bot = top, vol = 0;
+    for (const b of raw) {
+      vol += b.v || 0;
+      for (let k = 0; k < 500; k++) {
+        let o, c;
+        if (b.c >= top + box - 1e-9 * box) { o = top; c = top + box; bot = top; top = c; }
+        else if (b.c <= bot - box + 1e-9 * box) { o = bot; c = bot - box; top = bot; bot = c; }
+        else break;
+        out.push({ t: b.t + k, o, c, h: Math.max(o, c), l: Math.min(o, c), v: vol }); // (+k ms keeps times increasing)
+        vol = 0;
+      }
+    }
+    return out;
+  }
+  // Kagi: a line that keeps going while price continues, and turns when it reverses by the reversal amount.
+  // Thick (yang) after it rises above the previous high, thin (yin) after it falls below the previous low.
+  function kagi(raw, rev, isPct) {
+    const out = [];
+    if (!raw.length || !(rev > 0)) return out;
+    const R = (price) => (isPct ? Math.abs(price) * rev : rev);
+    const start = raw[0].c;
+    let cur = null;
+    for (const b of raw) {
+      const c = b.c;
+      if (!cur) {
+        if (Math.abs(c - start) >= R(start)) { cur = { t: b.t, o: start, c, up: c > start, v: b.v || 0 }; out.push(cur); }
+        continue;
+      }
+      if (cur.up ? c >= cur.c : c <= cur.c) cur.c = c;
+      else if (cur.up ? c <= cur.c - R(cur.c) : c >= cur.c + R(cur.c)) { cur = { t: b.t, o: cur.c, c, up: !cur.up, v: 0 }; out.push(cur); }
+      cur.v += b.v || 0;
+    }
+    let yang = out.length ? out[0].up : true, lastHigh = null, lastLow = null;
+    return out.map((k) => {
+      const s0 = yang;
+      let sw = null;
+      if (k.up && !yang && lastHigh !== null && k.c > lastHigh) { sw = lastHigh; yang = true; }
+      if (!k.up && yang && lastLow !== null && k.c < lastLow) { sw = lastLow; yang = false; }
+      if (k.up) lastHigh = k.c; else lastLow = k.c;
+      return { t: k.t, o: k.o, c: k.c, h: Math.max(k.o, k.c), l: Math.min(k.o, k.c), v: k.v, kagi: { s0, sw, s1: yang } };
+    });
+  }
+  // Point & Figure: columns of X (rising) and O (falling), one mark per box; a new column needs a move of
+  // `rev` boxes the other way
+  function pointFigure(raw, box, rev) {
+    const out = [];
+    if (!raw.length || !(box > 0)) return out;
+    const fl = (v) => Math.floor(v / box + 1e-9) * box, ce = (v) => Math.ceil(v / box - 1e-9) * box;
+    const p0 = fl(raw[0].c);
+    let col = null;
+    for (const b of raw) {
+      const c = b.c;
+      if (!col) {
+        if (c >= p0 + box) col = { t: b.t, x: true, lo: p0, hi: fl(c), v: 0 };
+        else if (c <= p0 - box) col = { t: b.t, x: false, lo: ce(c), hi: p0, v: 0 };
+        if (col) out.push(col); else continue;
+      } else if (col.x) {
+        if (fl(c) > col.hi) col.hi = fl(c);
+        else if (c <= col.hi - rev * box + 1e-9 * box) { col = { t: b.t, x: false, lo: ce(c), hi: col.hi - box, v: 0 }; out.push(col); }
+      } else {
+        if (ce(c) < col.lo) col.lo = ce(c);
+        else if (c >= col.lo + rev * box - 1e-9 * box) { col = { t: b.t, x: true, lo: col.lo + box, hi: fl(c), v: 0 }; out.push(col); }
+      }
+      col.v += b.v || 0;
+    }
+    return out.map((k) => ({ t: k.t, o: k.x ? k.lo : k.hi, c: k.x ? k.hi : k.lo, h: k.hi + box / 2, l: k.lo - box / 2, v: k.v, pnf: { x: k.x, lo: k.lo, hi: k.hi, box } }));
+  }
+
   function heikinAshi(bars) {
     const out = new Array(bars.length);
     for (let i = 0; i < bars.length; i++) {
@@ -111,6 +197,10 @@
       this.spacing = 8;
       this.rightOffset = 6;
       this.chartType = 'candles';
+      this.raw = [];          // the real candles; this.bars is what's shown (the same, or Renko/Kagi/P&F built from them)
+      this.rawInterval = 3600e3;
+      this.brickOpts = {};    // { renko: { mode: 'atr'|'fixed', size }, kagi: { mode: 'atr'|'pct'|'fixed', value }, pnf: { mode, size, rev } }
+      this.brickInfo = '';    // e.g. "Renko · box 250", shown after the title
       this.title = '';
       this.info = ''; // a line under the title (funding rate, open interest… on futures)
       this.live = false;
@@ -245,48 +335,87 @@
     }
 
     // ------------------------------------------------------------------ data
+    // build what's shown from the real candles (Renko, Kagi, P&F), or show them as they are
+    _rebuild() {
+      const t = this.chartType, raw = this.raw;
+      if (!BRICK_TYPES.has(t)) { this.bars = raw; this.interval = this.rawInterval; this.brickInfo = ''; return; }
+      const o = this.brickOpts[t] || {}, fmt = (v) => String(+(+v).toPrecision(6)); // 500, 0.25, 0.0005
+      let out;
+      if (t === 'renko') {
+        const box = o.mode === 'fixed' && o.size > 0 ? o.size : atrSize(raw);
+        out = renko(raw, box);
+        this.brickSize = box;
+        this.brickInfo = `Renko · box ${fmt(box)}${o.mode === 'fixed' ? '' : ' (ATR 14)'}`;
+      } else if (t === 'kagi') {
+        const pct = o.mode === 'pct', rev = o.mode === 'fixed' && o.value > 0 ? o.value : pct ? (o.value > 0 ? o.value : 1) / 100 : atrSize(raw);
+        out = kagi(raw, rev, pct);
+        this.brickSize = pct ? null : rev;
+        this.brickInfo = `Kagi · reversal ${pct ? (rev * 100).toFixed(2).replace(/\.?0+$/, '') + '%' : fmt(rev) + (o.mode === 'fixed' ? '' : ' (ATR 14)')}`;
+      } else {
+        const box = o.mode === 'fixed' && o.size > 0 ? o.size : atrSize(raw), rev = Math.max(1, Math.round(o.rev || 3));
+        out = pointFigure(raw, box, rev);
+        this.brickSize = box;
+        this.brickInfo = `Point & Figure · box ${fmt(box)}${o.mode === 'fixed' ? '' : ' (ATR 14)'} · reversal ${rev}`;
+      }
+      this.bars = out;
+      // the average time a brick takes, for the time axis and for drawing beyond the last brick
+      this.interval = out.length > 1 ? Math.max(this.rawInterval, (out[out.length - 1].t - out[0].t) / (out.length - 1)) : this.rawInterval;
+    }
+    get isBrick() { return BRICK_TYPES.has(this.chartType); }
+
     setData(bars, interval, { resetView = false, decimals } = {}) {
-      this.bars = bars;
-      this.interval = interval;
+      this.raw = bars;
+      this.rawInterval = interval;
       this.decimals = decimals ?? decimalsFor(bars.length ? bars[bars.length - 1].c : 1);
+      this._rebuild();
       if (resetView) {
         this.spacing = 8;
         this.rightOffset = 6;
         for (const p of this.panes) p.auto = true;
+        this._fitBricks();
       }
       this.message = bars.length ? '' : this.message;
       this.recalc();
     }
 
     prependBars(older) {
-      const first = this.bars.length ? this.bars[0].t : Infinity;
+      const first = this.raw.length ? this.raw[0].t : Infinity;
       const add = older.filter((b) => b.t < first);
       if (!add.length) return 0;
-      this.bars = add.concat(this.bars); // view is anchored to the right, so nothing moves
+      this.raw = add.concat(this.raw); // view is anchored to the right, so nothing moves
+      this._rebuild();
       this.recalc();
       return add.length;
     }
 
     updateBar(bar) {
-      const n = this.bars.length;
-      if (n && this.bars[n - 1].t === bar.t) this.bars[n - 1] = bar;
-      else if (!n || bar.t > this.bars[n - 1].t) {
-        this.bars.push(bar);
-        // when the user is looking at history, keep their view still
-        if (this.rightOffset < -1) this.rightOffset -= 1;
-      } else {
+      const R = this.raw, n = R.length, shown = this.bars.length;
+      if (n && R[n - 1].t === bar.t) R[n - 1] = bar;
+      else if (!n || bar.t > R[n - 1].t) R.push(bar);
+      else {
         // a correction to a recent bar (polled sources resend the last few bars with final values)
         let i = n - 2;
-        while (i >= 0 && i >= n - 10 && this.bars[i].t > bar.t) i--;
-        if (i < 0 || this.bars[i].t !== bar.t) return;
-        const old = this.bars[i];
+        while (i >= 0 && i >= n - 10 && R[i].t > bar.t) i--;
+        if (i < 0 || R[i].t !== bar.t) return;
+        const old = R[i];
         if (old.o === bar.o && old.h === bar.h && old.l === bar.l && old.c === bar.c && old.v === bar.v) return;
-        this.bars[i] = bar;
+        R[i] = bar;
       }
+      if (this.isBrick) this._rebuild();
+      // when the user is looking at history, keep their view still
+      if (this.bars.length > shown && this.rightOffset < -1) this.rightOffset -= this.bars.length - shown;
       this.recalc();
     }
 
-    setChartType(t) { this.chartType = t; this.recalc(); }
+    setChartType(t) { this.chartType = t; this._rebuild(); this._fitBricks(); this._clampView(); this.recalc(); }
+    setBrickOptions(o) { this.brickOpts = JSON.parse(JSON.stringify(o || {})); if (this.isBrick) { this._rebuild(); this._fitBricks(); this._clampView(); this.recalc(); } }
+    // few bricks or columns: zoom in so they fill the chart
+    _fitBricks() {
+      const n = this.bars.length;
+      if (!this.isBrick || !n || n * this.spacing >= this.plotW * 0.7) return;
+      this.spacing = clamp((this.plotW * 0.85) / (n + 4), 1, 24);
+      this.rightOffset = 3;
+    }
 
     recalc() {
       this.ha = this.chartType === 'heikin' ? heikinAshi(this.bars) : null;
@@ -610,7 +739,7 @@
       const main = this.main.legendEl;
       if (!main) return;
       const titleEl = main.querySelector('.lg-title');
-      if (titleEl) titleEl.textContent = this.title;
+      if (titleEl) titleEl.textContent = this.title + (this.brickInfo ? ' · ' + this.brickInfo : '');
       const ohlc = main.querySelector('.lg-ohlc');
       const B = this._dispBars();
       if (ohlc) {
@@ -943,6 +1072,58 @@
         ctx.lineWidth = 1;
         return;
       }
+      if (type === 'renko') {
+        // bricks touch each other: full width, no wicks
+        const bw2 = Math.max(1, Math.floor(sp * 0.9));
+        for (let i = lo; i <= hi; i++) {
+          const k = B[i], up = k.c >= k.o, x0 = Math.round(this.xAt(i) - bw2 / 2);
+          const top = Math.round(this.yOf(p, k.h)), bot = Math.round(this.yOf(p, k.l));
+          ctx.fillStyle = withAlpha(up ? T.up : T.down, 0.85);
+          ctx.fillRect(x0, top, bw2, Math.max(1, bot - top));
+          if (bw2 >= 4) { ctx.strokeStyle = up ? T.up : T.down; ctx.strokeRect(x0 + 0.5, top + 0.5, bw2 - 1, Math.max(0, bot - top - 1)); }
+        }
+        return;
+      }
+      if (type === 'kagi') {
+        // vertical lines joined by short horizontals; thick and green while yang, thin and red while yin
+        const seg = (x1, y1, x2, y2, yang) => {
+          ctx.strokeStyle = yang ? T.up : T.down;
+          ctx.lineWidth = yang ? 2.5 : 1.2;
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        };
+        ctx.lineCap = 'square';
+        for (let i = lo; i <= hi; i++) {
+          const k = B[i], s = k.kagi, x = Math.round(this.xAt(i)) + 0.5, yo = this.yOf(p, k.o), yc = this.yOf(p, k.c);
+          if (i > 0) seg(Math.round(this.xAt(i - 1)) + 0.5, yo, x, yo, s.s0);
+          if (s.sw !== null) { const ys = this.yOf(p, s.sw); seg(x, yo, x, ys, s.s0); seg(x, ys, x, yc, s.s1); }
+          else seg(x, yo, x, yc, s.s0);
+        }
+        ctx.lineCap = 'butt';
+        ctx.lineWidth = 1;
+        return;
+      }
+      if (type === 'pnf') {
+        // an X or an O for every box of each column
+        const w = Math.max(2, sp * 0.8);
+        ctx.lineWidth = Math.max(1, Math.min(2, sp / 8));
+        for (let i = lo; i <= hi; i++) {
+          const k = B[i].pnf, x = this.xAt(i);
+          const hBox = Math.abs(this.yOf(p, k.lo) - this.yOf(p, k.lo + k.box));
+          const r = Math.max(1, Math.min(w, hBox) / 2 - 1);
+          ctx.strokeStyle = k.x ? T.up : T.down;
+          const nBoxes = Math.round((k.hi - k.lo) / k.box);
+          for (let j = 0; j <= nBoxes && j < 2000; j++) {
+            const y = this.yOf(p, k.lo + j * k.box);
+            if (y < p.top - r || y > p.top + p.h + r) continue;
+            ctx.beginPath();
+            if (k.x) { ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r); ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r); }
+            else ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+        ctx.lineWidth = 1;
+        return;
+      }
       let bw = Math.max(1, Math.floor(sp * 0.72));
       if (bw > 2 && bw % 2 === 0) bw -= 1;
       for (const up of [true, false]) {
@@ -1196,7 +1377,7 @@
           }
         }
         for (const al of this.alerts) this._axisLabel(this.yOf(p, al.price), this._fmtMain(al.price), T.alert, '#111', p);
-        const B = this._dispBars(), last = B[B.length - 1], real = this.bars[this.bars.length - 1];
+        const B = this._dispBars(), last = B[B.length - 1], real = this.raw[this.raw.length - 1] || last;
         const color = last.c >= last.o ? T.up : T.down, y = this.yOf(p, real.c);
         // dotted last-price line
         ctx.restore();
@@ -1216,7 +1397,7 @@
         ctx.rect(this.plotW, p.top, this.axisW, p.h);
         ctx.clip();
         this._axisLabel(y, this._fmtMain(real.c), color, '#fff', p);
-        if (this.live && this.countdown !== false && this.interval < 7 * 86400e3) {
+        if (this.live && this.countdown !== false && !this.isBrick && this.interval < 7 * 86400e3) {
           const left = Math.max(0, real.t + this.interval - Date.now());
           const s = Math.floor(left / 1000), hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
           const txt = (hh ? hh + ':' + pad2(mm) : pad2(mm)) + ':' + pad2(ss);

@@ -254,7 +254,7 @@ is meant for personal use.
   Figure** (see below)
 - **Custom indicators** with Candela Script, a small language with an editor, examples and reference
   (see below).
-- **Indicators (68)**, all free:
+- **Indicators (75)**, all free:
   - *Moving averages and overlays*: SMA, EMA, WMA, Hull, DEMA, TEMA, VWMA, ALMA, SMMA, KAMA, Least Squares,
     McGinley Dynamic, MA Ribbon, MA Cross, Envelopes, Bollinger Bands, Keltner, Donchian, VWAP, Supertrend,
     Parabolic SAR, Ichimoku, Chandelier Exit, Williams Alligator, Williams Fractals, Zig Zag, Pivot Points
@@ -265,9 +265,11 @@ is meant for personal use.
   - *Volume and volatility*: OBV, Accumulation/Distribution, Chaikin Money Flow, Chaikin Oscillator, Elder
     Force Index, Ease of Movement, Price Volume Trend, Volume Oscillator, ATR, Standard Deviation, Historical
     Volatility, Bollinger %B and BandWidth, Choppiness Index, Mass Index.
+  - *Order flow and smart money*: Volume Delta, Cumulative Volume Delta, Volume Profile (Visible Range),
+    Fair Value Gaps, Order Blocks, Liquidity Levels, Market Structure (BOS / CHoCH); see below.
   Every input and color is editable; oscillators get their own resizable, reorderable panes.
-- **Drawing tools (75)**: lines, channels, pitchforks, Fibonacci and Gann tools, chart patterns, Elliott
-  waves, cycles, long/short positions, forecasts, volume profiles, measurers, brushes, arrows and shapes;
+- **Drawing tools (77)**: lines, channels, pitchforks, Fibonacci and Gann tools, chart patterns, Elliott
+  waves, cycles, long/short positions, forecasts, volume profiles, fair value gap and order block zones, measurers, brushes, arrows and shapes;
   see *Drawing tools* below.
 - **Alerts** with sound, on-screen and desktop notifications, and with the included server also when
   the browser is closed, via phone push (ntfy), Telegram or Discord/Slack webhooks:
@@ -303,6 +305,28 @@ When an exchange doesn't offer a timeframe, Candela builds it from smaller candl
 1D candles, a month from daily candles), live updates included. Days start at midnight UTC, weeks on
 Monday, months on the 1st. Intraday lengths that don't divide a day evenly (5H, 7H…) restart at midnight,
 so the last candle of each day is shorter. Stocks and forex can use custom timeframes of a day or more.
+
+## Order flow and smart-money indicators
+
+- **Volume Delta**: buy volume minus sell volume for each candle. **Cumulative Volume Delta (CVD)**: the
+  running total, optionally restarting each day, week or month. On Binance (spot and futures) these use the
+  exchange's real taker-buy volume. Other exchanges don't publish it per candle, so there it is estimated
+  from where each candle closed in its range; that estimate only roughly follows real buying and selling.
+- **Volume Profile (Visible Range)**: the volume traded at each price over the candles on screen, split into
+  buying and selling, with the point of control (busiest price) and the value area (70% of the volume, set
+  in its inputs). It updates as you scroll and zoom.
+- **Fair Value Gaps**: three-candle gaps where the first candle's high and the third candle's low don't
+  overlap (or the reverse). Shown as boxes until the price fills them (at the far edge, the middle or the
+  near edge; your choice), with a minimum size and how many to show.
+- **Order Blocks**: when a close breaks the last swing high, the lowest down candle since that swing is a
+  bullish block (the reverse for bearish blocks). Shown until a candle closes through it.
+- **Liquidity Levels**: swing highs (buy-side liquidity, BSL) and swing lows (sell-side, SSL) where stops
+  tend to sit; equal highs and lows (EQH / EQL) highlighted; a level is marked ✓ swept once the price
+  trades through it.
+- **Market Structure**: breaks of a swing high or low in the trend's direction (BOS) and against it
+  (CHoCH).
+
+These are Candela's own versions of widely used ideas; settings and colors are in each indicator's dialog.
 
 ## Indicators on another timeframe
 
@@ -440,7 +464,9 @@ Star tools (★ in the menus) to collect them under the **heart** button.
 - **Forecasting**: Long and Short position (drag target, stop and end; shows risk/reward and whether the
   target or the stop was hit), Position forecast, Bars pattern (copies the candles of a range to where you
   click), Ghost feed (sketch future candles), Sector. **Volume**: Anchored VWAP, Fixed range volume
-  profile, Anchored volume profile (with point of control and the 70% value area). **Measurers**: Price
+  profile, Anchored volume profile (with point of control and the 70% value area). **Smart money**: Fair
+  value gap (click the middle candle of a three-candle gap; the box runs right until the price fills it) and
+  Order block (click a candle; it holds until a close through its far side). **Measurers**: Price
   range, Date range, Date and price range.
 - **Brushes**: Brush, Highlighter. **Arrows**: Arrow marker, Arrow, Arrow mark up/down (with optional text).
   **Shapes**: Rectangle, Rotated rectangle, Path, Circle, Ellipse, Polyline, Triangle, Arc, Curve, Double curve.

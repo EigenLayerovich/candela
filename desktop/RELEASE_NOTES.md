@@ -1,4 +1,10 @@
-## New in 1.15.0
+## New in 1.16.0
+
+- **Order flow**: Volume Delta and Cumulative Volume Delta (real taker volume on Binance, estimated elsewhere), and a **Volume Profile** of the visible range with point of control and value area.
+- **Smart-money indicators**: Fair Value Gaps, Order Blocks, Liquidity Levels (buy/sell-side, equal highs/lows, swept levels) and Market Structure (BOS / CHoCH).
+- **Fair value gap and Order block drawing tools** (Forecasting menu → Smart money): click a candle and the zone runs until it is filled or broken.
+
+## In 1.15.0
 
 - **Paper trading**: practise with a virtual $100,000 account (Trade button). Market, limit and stop orders with take profit and stop loss; up to 5 accounts; commission and leverage settings.
 - Positions, orders, stops and targets are **lines on the chart**: drag them to move, right-click to cancel or close. Right-click the chart at a price to place a limit or stop order there.

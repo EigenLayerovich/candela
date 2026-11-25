@@ -2120,6 +2120,7 @@
       if (f.colorDown) colorRow('Fill (down)', f.key + 'Down', f.colorDown);
     }
     if (def.bandFill) colorRow('Band fill', 'band', def.bandColor || chart.theme.band);
+    for (const c of def.colors || []) colorRow(c.name, c.key, c.color);
     if (def.plots.some((pl) => pl.dynamic) || (def.fills || []).some((f) => f.dynamic)) styleBox.appendChild(h('p', { class: 'muted' }, 'Some colors are set bar by bar by the script.'));
 
     const tabs = h('div', { class: 'tabs' });

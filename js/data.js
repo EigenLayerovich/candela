@@ -45,7 +45,7 @@
       }
       throw e;
     }
-    return rows.map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+    return rows.map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5], bv: +r[9] })); // bv: taker buy volume
   }
 
   let symbolCache = null;
@@ -97,7 +97,7 @@
     return socket(`/ws/${symbol.toLowerCase()}@kline_${tf}`, (m) => {
       const k = m.k;
       if (!k) return;
-      onBar({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v });
+      onBar({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v, bv: +k.V });
     }, onStatus);
   }
 
@@ -500,8 +500,8 @@
     const out = [];
     for (const b of bars) {
       const t = bucketOf(b.t, tf), last = out[out.length - 1];
-      if (last && last.t === t) { last.h = Math.max(last.h, b.h); last.l = Math.min(last.l, b.l); last.c = b.c; last.v += b.v; }
-      else out.push({ t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v });
+      if (last && last.t === t) { last.h = Math.max(last.h, b.h); last.l = Math.min(last.l, b.l); last.c = b.c; last.v += b.v; if (last.bv >= 0) last.bv = b.bv >= 0 ? last.bv + b.bv : undefined; }
+      else out.push(b.bv >= 0 ? { t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v, bv: b.bv } : { t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v });
     }
     return out;
   }

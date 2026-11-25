@@ -221,13 +221,13 @@
         if (end) url += `&endTime=${Math.floor(end)}`;
         const rows = await get(this, url);
         if (!Array.isArray(rows)) throw err(`Binance Futures: ${rows.msg || 'unexpected reply'}`, { fatal: true });
-        return rows.map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+        return rows.map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5], bv: +r[9] }));
       });
     },
     stream(b, q, tf, onBar, onStatus) {
       return liveOrPoll(this, b, q, tf, onBar, onStatus, (bar, status) => socket(`wss://fstream.binance.com/market/ws/${(b + q).toLowerCase()}@kline_${tf}`, { // market streams moved under /market
         onOpen: () => {},
-        onMessage: (m) => { const k = m.k; if (k) bar({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v }); },
+        onMessage: (m) => { const k = m.k; if (k) bar({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v, bv: +k.V }); },
         onStatus: status,
       }));
     },

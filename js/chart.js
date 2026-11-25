@@ -1412,6 +1412,19 @@
           ctx.lineCap = 'butt';
         }
       }
+      // indicators that draw their own shapes (zones, profiles)
+      if (def.paint) {
+        const font = getComputedStyle(this.el).fontFamily;
+        ctx.save();
+        try {
+          def.paint({
+            ctx, out, bars: this.bars, params: ind.params, a, b, right: this.plotW, top: p.top, height: p.h, font, textColor: this.theme.text,
+            xAt: (i) => this.xAt(i), xOfTime: (t) => this.xAt(this.timeToIndex(t)), yOf: yfn,
+            color: (k) => ind.colors[k] || ((def.colors || []).find((c) => c.key === k) || {}).color || '#888',
+          });
+        } catch (e) { console.error(def.id, e); }
+        ctx.restore();
+      }
     }
 
     // markers for a true/false series: a triangle above the bar's high or below its low (price chart),

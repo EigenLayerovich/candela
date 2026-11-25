@@ -1005,6 +1005,305 @@
   // overlays go with the other overlays, oscillators at the end
   for (const d of MORE) DEFS.push(d);
 
+  // ================================================================ order flow and smart-money concepts
+  // Buy volume of a candle: the exchange's taker-buy volume where it reports it (Binance spot and futures),
+  // otherwise an estimate from where the candle closed in its range (close at the high = all buying).
+  const buyVol = (b) => (b.bv >= 0 ? b.bv : b.h > b.l ? (b.v * (b.c - b.l)) / (b.h - b.l) : b.v / 2);
+  const YES_NO = (key, label, def) => ({ key, label, type: 'select', options: ['Yes', 'No'], def });
+
+  // swing highs and lows: a bar whose high (low) is the highest (lowest) of len bars on each side.
+  // Confirmed len bars later, so `at` is the bar where it becomes known.
+  function swings(bars, len) {
+    const out = [];
+    for (let i = len; i < bars.length - len; i++) {
+      let hi = true, lo = true;
+      for (let k = i - len; k <= i + len && (hi || lo); k++) {
+        if (k === i) continue;
+        if (bars[k].h >= bars[i].h && (k > i || bars[k].h > bars[i].h)) hi = false;
+        if (bars[k].l <= bars[i].l && (k > i || bars[k].l < bars[i].l)) lo = false;
+      }
+      if (hi) out.push({ i, at: i + len, high: true, p: bars[i].h });
+      if (lo) out.push({ i, at: i + len, high: false, p: bars[i].l });
+    }
+    return out;
+  }
+  // a parameter-free box list for the chart: { list: [{ t1, t2 (null: up to now), top, bot, color, label, line, dash }] }
+  const zoneOut = (list) => ({ $zones: { list } });
+
+  // draws $zones: boxes (or lines) from t1 to t2, labelled
+  function paintZones(api) {
+    const z = api.out.$zones;
+    if (!z || !z.list.length) return;
+    const { ctx } = api;
+    ctx.save();
+    ctx.font = '600 10px ' + api.font;
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+    for (const zn of z.list) {
+      const x1 = api.xOfTime(zn.t1), x2 = zn.t2 == null ? api.right : api.xOfTime(zn.t2);
+      if (x2 < 0 || x1 > api.right) continue;
+      const col = api.color(zn.color);
+      const yt = api.yOf(zn.top), yb = api.yOf(zn.bot);
+      if (zn.line) {
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 1;
+        ctx.setLineDash(zn.dash ? [4, 3] : []);
+        ctx.beginPath(); ctx.moveTo(x1, Math.round(yt) + 0.5); ctx.lineTo(x2, Math.round(yt) + 0.5); ctx.stroke();
+        ctx.setLineDash([]);
+        if (zn.label) {
+          ctx.fillStyle = col;
+          ctx.textAlign = zn.labelAt === 'mid' ? 'center' : zn.labelAt === 'end' ? 'right' : 'left';
+          ctx.fillText(zn.label, zn.labelAt === 'mid' ? (x1 + x2) / 2 : zn.labelAt === 'end' ? Math.min(x2, api.right) - 3 : x1 + 2, yt + (zn.below ? 3 : -12));
+          ctx.textAlign = 'left';
+        }
+        continue;
+      }
+      ctx.fillStyle = col;
+      ctx.fillRect(x1, Math.min(yt, yb), Math.max(1, x2 - x1), Math.max(1, Math.abs(yb - yt)));
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(Math.round(x1) + 0.5, Math.round(Math.min(yt, yb)) + 0.5, Math.max(1, Math.round(x2 - x1)), Math.max(1, Math.round(Math.abs(yb - yt))));
+      if (zn.label && Math.abs(yb - yt) >= 9 && x2 - x1 > 24) { ctx.fillStyle = api.textColor; ctx.globalAlpha = 0.8; ctx.fillText(zn.label, Math.max(x1, 0) + 4, Math.min(yt, yb) + 2); ctx.globalAlpha = 1; }
+    }
+    ctx.restore();
+  }
+
+  const FLOW = [
+    {
+      id: 'vdelta', name: 'Volume Delta', short: 'Delta', overlay: false,
+      desc: 'Buy volume minus sell volume of each candle (Binance: real taker volume; other exchanges: estimated)',
+      inputs: [],
+      plots: [{ key: 'd', name: 'Delta', style: 'histogram', palette: ['rgba(34,171,148,0.8)', 'rgba(247,82,95,0.8)'], format: 'volume' }],
+      levels: [0],
+      calc(bars) {
+        const d = bars.map((b) => 2 * buyVol(b) - b.v);
+        return { d, d$i: d.map((v) => (v >= 0 ? 0 : 1)) };
+      },
+    },
+    {
+      id: 'cvd', name: 'Cumulative Volume Delta', short: 'CVD', overlay: false,
+      desc: 'Running total of buy minus sell volume; can restart each day, week or month (Binance: real taker volume; others: estimated)',
+      inputs: [{ key: 'anchor', label: 'Restart every', type: 'select', options: ['Never', 'Day', 'Week', 'Month'], def: 'Never' }],
+      plots: [{ key: 'cvd', name: 'CVD', color: '#3D8BFD', format: 'volume' }],
+      levels: [0],
+      calc(bars, p) {
+        const D = 86400e3;
+        const key = (t) => (p.anchor === 'Day' ? Math.floor(t / D) : p.anchor === 'Week' ? Math.floor((t / D + 3) / 7) : p.anchor === 'Month' ? new Date(t).getUTCFullYear() * 12 + new Date(t).getUTCMonth() : 0);
+        let acc = 0, k0 = null;
+        const cvd = bars.map((b) => { const k = key(b.t); if (k !== k0) { acc = 0; k0 = k; } acc += 2 * buyVol(b) - b.v; return acc; });
+        return { cvd };
+      },
+    },
+    {
+      id: 'vrvp', name: 'Volume Profile (Visible Range)', short: 'VRVP', overlay: true,
+      desc: 'Volume traded at each price over the candles on screen, with the point of control and value area',
+      inputs: [
+        { key: 'rows', label: 'Rows', type: 'int', def: 24, min: 6, max: 200 },
+        { key: 'width', label: 'Width (% of chart)', type: 'int', def: 25, min: 5, max: 60 },
+        { key: 'va', label: 'Value area (%)', type: 'int', def: 70, min: 10, max: 100 },
+        { key: 'side', label: 'Placement', type: 'select', options: ['Right', 'Left'], def: 'Right' },
+      ],
+      plots: [],
+      colors: [
+        { key: 'up', name: 'Buy volume', color: 'rgba(34,171,148,0.45)' }, { key: 'down', name: 'Sell volume', color: 'rgba(247,82,95,0.45)' },
+        { key: 'poc', name: 'Point of control', color: '#F5A623' }, { key: 'vah', name: 'Value area lines', color: 'rgba(120,123,134,0.8)' },
+      ],
+      calc: () => ({}),
+      paint(api) {
+        const { ctx, bars, params: p } = api, a = Math.max(0, api.a), b = Math.min(bars.length - 1, api.b);
+        if (b - a < 1) return;
+        let lo = Infinity, hi = -Infinity;
+        for (let i = a; i <= b; i++) { if (bars[i].l < lo) lo = bars[i].l; if (bars[i].h > hi) hi = bars[i].h; }
+        if (!(hi > lo)) return;
+        const n = p.rows, step = (hi - lo) / n, up = new Float64Array(n), dn = new Float64Array(n);
+        for (let i = a; i <= b; i++) {
+          const B = bars[i], v = B.v || 0;
+          if (!v) continue;
+          const buy = B.bv >= 0 ? B.bv : B.c >= B.o ? v : 0, sell = v - buy;
+          const r0 = Math.min(n - 1, Math.floor((B.l - lo) / step)), r1 = Math.min(n - 1, Math.floor((B.h - lo) / step));
+          const span = B.h - B.l;
+          for (let r = r0; r <= r1; r++) {
+            // the share of the candle's range inside this row
+            const f = span > 0 ? (Math.min(B.h, lo + (r + 1) * step) - Math.max(B.l, lo + r * step)) / span : 1 / (r1 - r0 + 1);
+            up[r] += buy * f; dn[r] += sell * f;
+          }
+        }
+        const tot = Array.from(up, (u, r) => u + dn[r]), all = tot.reduce((x, y) => x + y, 0);
+        if (!all) return;
+        let poc = 0;
+        for (let r = 1; r < n; r++) if (tot[r] > tot[poc]) poc = r;
+        // value area: grow from the point of control toward the bigger neighbour
+        let vaLo = poc, vaHi = poc, inVa = tot[poc];
+        while (inVa < (all * p.va) / 100 && (vaLo > 0 || vaHi < n - 1)) {
+          const below = vaLo > 0 ? tot[vaLo - 1] : -1, above = vaHi < n - 1 ? tot[vaHi + 1] : -1;
+          if (above >= below) inVa += tot[++vaHi]; else inVa += tot[--vaLo];
+        }
+        const W = (api.right * p.width) / 100, mx = tot[poc], right = p.side === 'Left';
+        ctx.save();
+        for (let r = 0; r < n; r++) {
+          const y1 = api.yOf(lo + (r + 1) * step), y2 = api.yOf(lo + r * step), hh = Math.max(1, Math.abs(y2 - y1) - 1);
+          const wu = (up[r] / mx) * W, wd = (dn[r] / mx) * W;
+          ctx.globalAlpha = r >= vaLo && r <= vaHi ? 1 : 0.5;
+          const x0 = right ? 0 : api.right - wu - wd;
+          ctx.fillStyle = api.color('up'); ctx.fillRect(x0, Math.min(y1, y2), wu, hh);
+          ctx.fillStyle = api.color('down'); ctx.fillRect(x0 + wu, Math.min(y1, y2), wd, hh);
+        }
+        ctx.globalAlpha = 1;
+        const line = (price, col, w, dash) => { const y = Math.round(api.yOf(price)) + 0.5; ctx.strokeStyle = col; ctx.lineWidth = w; ctx.setLineDash(dash); ctx.beginPath(); ctx.moveTo(api.xAt(a), y); ctx.lineTo(api.right, y); ctx.stroke(); };
+        line(lo + (poc + 0.5) * step, api.color('poc'), 1.5, []);
+        line(lo + (vaHi + 1) * step, api.color('vah'), 1, [4, 3]);
+        line(lo + vaLo * step, api.color('vah'), 1, [4, 3]);
+        ctx.setLineDash([]);
+        ctx.restore();
+      },
+    },
+    {
+      id: 'fvg', name: 'Fair Value Gaps', short: 'FVG', overlay: true,
+      desc: 'Three-candle price gaps (imbalances), shown until the price fills them',
+      inputs: [
+        { key: 'minPct', label: 'Minimum gap (% of price)', type: 'float', def: 0, min: 0, max: 10, step: 0.05 },
+        { key: 'max', label: 'Gaps to show (each side)', type: 'int', def: 10, min: 1, max: 100 },
+        YES_NO('filled', 'Show filled gaps', 'No'),
+        { key: 'fill', label: 'Filled when the price reaches', type: 'select', options: ['The far edge', 'The middle', 'The near edge'], def: 'The far edge' },
+      ],
+      plots: [],
+      colors: [{ key: 'bull', name: 'Bullish gap', color: 'rgba(34,171,148,0.22)' }, { key: 'bear', name: 'Bearish gap', color: 'rgba(247,82,95,0.22)' }],
+      calc(bars, p) {
+        const gaps = [];
+        for (let i = 2; i < bars.length; i++) {
+          const a = bars[i - 2], c = bars[i];
+          if (c.l > a.h && (c.l - a.h) / c.c >= p.minPct / 100) gaps.push({ i, bull: true, top: c.l, bot: a.h });
+          else if (c.h < a.l && (a.l - c.h) / c.c >= p.minPct / 100) gaps.push({ i, bull: false, top: a.l, bot: c.h });
+        }
+        const lvl = (g) => (p.fill === 'The middle' ? (g.top + g.bot) / 2 : (p.fill === 'The near edge') === g.bull ? g.top : g.bot);
+        const list = [];
+        for (const side of [true, false]) {
+          const mine = [];
+          for (const g of gaps) {
+            if (g.bull !== side) continue;
+            const L = lvl(g);
+            let end = null;
+            for (let k = g.i + 1; k < bars.length; k++) if (g.bull ? bars[k].l <= L : bars[k].h >= L) { end = k; break; }
+            if (end != null && p.filled !== 'Yes') continue;
+            mine.push({ t1: bars[g.i - 1].t, t2: end == null ? null : bars[end].t, top: g.top, bot: g.bot, color: g.bull ? 'bull' : 'bear', label: 'FVG' });
+          }
+          list.push(...mine.slice(-p.max));
+        }
+        return zoneOut(list);
+      },
+      paint: paintZones,
+    },
+    {
+      id: 'obs', name: 'Order Blocks', short: 'OB', overlay: true,
+      desc: 'The last opposite candle before a move that broke a swing high or low; shown until the price closes through it',
+      inputs: [
+        { key: 'len', label: 'Swing length', type: 'int', def: 5, min: 2, max: 50 },
+        { key: 'max', label: 'Blocks to show (each side)', type: 'int', def: 3, min: 1, max: 50 },
+        YES_NO('broken', 'Show broken blocks', 'No'),
+        { key: 'body', label: 'Zone', type: 'select', options: ['Whole candle', 'Candle body'], def: 'Whole candle' },
+      ],
+      plots: [],
+      colors: [{ key: 'bull', name: 'Bullish block', color: 'rgba(61,139,253,0.22)' }, { key: 'bear', name: 'Bearish block', color: 'rgba(245,166,35,0.22)' }],
+      calc(bars, p) {
+        const sw = swings(bars, p.len).sort((x, y) => x.at - y.at), blocks = [];
+        let lastHi = null, lastLo = null, s = 0;
+        for (let i = 0; i < bars.length; i++) {
+          while (s < sw.length && sw[s].at <= i) { if (sw[s].high) lastHi = sw[s]; else lastLo = sw[s]; s++; }
+          const c = bars[i].c;
+          // close above the last swing high: the bullish block is the lowest down candle since that swing
+          if (lastHi && c > lastHi.p) {
+            let k = -1;
+            for (let j = lastHi.i; j < i; j++) if (bars[j].c < bars[j].o && (k < 0 || bars[j].l < bars[k].l)) k = j;
+            if (k >= 0) blocks.push({ i: k, from: i, bull: true });
+            lastHi = null;
+          }
+          if (lastLo && c < lastLo.p) {
+            let k = -1;
+            for (let j = lastLo.i; j < i; j++) if (bars[j].c > bars[j].o && (k < 0 || bars[j].h > bars[k].h)) k = j;
+            if (k >= 0) blocks.push({ i: k, from: i, bull: false });
+            lastLo = null;
+          }
+        }
+        const list = [];
+        for (const side of [true, false]) {
+          const mine = [];
+          for (const b of blocks) {
+            if (b.bull !== side) continue;
+            const B = bars[b.i], body = p.body === 'Candle body';
+            const top = body ? Math.max(B.o, B.c) : B.h, bot = body ? Math.min(B.o, B.c) : B.l;
+            let end = null;
+            for (let k = b.from + 1; k < bars.length; k++) if (side ? bars[k].c < bot : bars[k].c > top) { end = k; break; }
+            if (end != null && p.broken !== 'Yes') continue;
+            mine.push({ t1: B.t, t2: end == null ? null : bars[end].t, top, bot, color: side ? 'bull' : 'bear', label: side ? 'Bull OB' : 'Bear OB' });
+          }
+          list.push(...mine.slice(-p.max));
+        }
+        return zoneOut(list);
+      },
+      paint: paintZones,
+    },
+    {
+      id: 'liq', name: 'Liquidity Levels', short: 'Liquidity', overlay: true,
+      desc: 'Swing highs and lows where stops tend to sit, marked as swept once the price trades through them; equal highs and lows highlighted',
+      inputs: [
+        { key: 'len', label: 'Swing length', type: 'int', def: 5, min: 2, max: 50 },
+        { key: 'max', label: 'Levels to show (each side)', type: 'int', def: 6, min: 1, max: 50 },
+        { key: 'eq', label: 'Equal highs/lows within (% of price)', type: 'float', def: 0.1, min: 0, max: 2, step: 0.01 },
+        YES_NO('swept', 'Show swept levels', 'Yes'),
+      ],
+      plots: [],
+      colors: [{ key: 'buy', name: 'Above (buy-side)', color: '#F7525F' }, { key: 'sell', name: 'Below (sell-side)', color: '#22AB94' }, { key: 'swept', name: 'Swept', color: 'rgba(120,123,134,0.7)' }],
+      calc(bars, p) {
+        const sw = swings(bars, p.len), list = [];
+        for (const side of [true, false]) {
+          const mine = [], pts = sw.filter((x) => x.high === side);
+          for (const s of pts) {
+            s.end = null;
+            for (let k = s.i + 1; k < bars.length; k++) if (side ? bars[k].h > s.p : bars[k].l < s.p) { s.end = k; break; }
+          }
+          const alive = (s, i) => i > s.i && (s.end == null || i < s.end);
+          for (const s of pts) {
+            const end = s.end;
+            if (end != null && p.swept !== 'Yes') continue;
+            // equal highs/lows: two swings at nearly the same price, both standing at the same time
+            const eq = pts.some((o) => o !== s && Math.abs(o.p - s.p) <= (s.p * p.eq) / 100 && (alive(s, o.i) || alive(o, s.i)));
+            const label = (eq ? (side ? 'EQH' : 'EQL') : side ? 'BSL' : 'SSL') + (end != null ? ' ✓' : '');
+            mine.push({ t1: bars[s.i].t, t2: end == null ? null : bars[end].t, top: s.p, bot: s.p, line: true, dash: end != null, color: end != null ? 'swept' : side ? 'buy' : 'sell', label, below: !side, labelAt: 'end' });
+          }
+          list.push(...mine.slice(-p.max));
+        }
+        return zoneOut(list);
+      },
+      paint: paintZones,
+    },
+    {
+      id: 'structure', name: 'Market Structure (BOS / CHoCH)', short: 'Structure', overlay: true,
+      desc: 'Breaks of structure in the trend\'s direction (BOS) and changes of character against it (CHoCH), from swing highs and lows',
+      inputs: [{ key: 'len', label: 'Swing length', type: 'int', def: 5, min: 2, max: 50 }, { key: 'max', label: 'Breaks to show', type: 'int', def: 20, min: 1, max: 200 }],
+      plots: [],
+      colors: [{ key: 'bull', name: 'Bullish break', color: '#22AB94' }, { key: 'bear', name: 'Bearish break', color: '#F7525F' }],
+      calc(bars, p) {
+        const sw = swings(bars, p.len).sort((x, y) => x.at - y.at), list = [];
+        let lastHi = null, lastLo = null, s = 0, trend = 0;
+        for (let i = 0; i < bars.length; i++) {
+          while (s < sw.length && sw[s].at <= i) { if (sw[s].high) lastHi = sw[s]; else lastLo = sw[s]; s++; }
+          const c = bars[i].c;
+          if (lastHi && c > lastHi.p) {
+            list.push({ t1: bars[lastHi.i].t, t2: bars[i].t, top: lastHi.p, bot: lastHi.p, line: true, color: 'bull', label: trend < 0 ? 'CHoCH' : 'BOS', labelAt: 'mid' });
+            trend = 1; lastHi = null;
+          }
+          if (lastLo && c < lastLo.p) {
+            list.push({ t1: bars[lastLo.i].t, t2: bars[i].t, top: lastLo.p, bot: lastLo.p, line: true, color: 'bear', label: trend > 0 ? 'CHoCH' : 'BOS', labelAt: 'mid', below: true });
+            trend = -1; lastLo = null;
+          }
+        }
+        return zoneOut(list.slice(-p.max));
+      },
+      paint: paintZones,
+    },
+  ];
+  for (const d of FLOW) DEFS.push(d);
+
   const BY_ID = Object.fromEntries(DEFS.map((d) => [d.id, d]));
 
   function defaults(def) {

@@ -714,6 +714,41 @@
     },
     handles: (P, api, d) => { const i = Math.round(api.idx(d.pts[0].t)), b = api.bars[i]; return [{ x: P[0].x, y: b ? api.y(b.l) : P[0].y }]; },
   });
+  // ---- smart-money zones: click a candle; the zone runs right until the price fills or breaks it
+  const zoneBox = (g, x1, x2, yTop, yBot, col, label) => {
+    g.rect({ x: x1, y: yTop }, { x: x2, y: yBot }, { fill: alpha(col, 0.18), color: col, width: 1 });
+    g.line({ x: x1, y: (yTop + yBot) / 2 }, { x: x2, y: (yTop + yBot) / 2 }, { dash: [3, 3], width: 1, color: alpha(col, 0.6) });
+    g.text(label, x1 + 3, Math.min(yTop, yBot) + 2, { size: 10, base: 'top', color: col });
+  };
+  tool('fvgzone', {
+    name: 'Fair value gap', n: 1,
+    // the clicked candle is the middle one of three: the gap is between the first's high and the third's low (or the reverse)
+    draw(g, P, d) {
+      const api = g.api, B = api.bars, i = Math.round(api.idx(d.pts[0].t));
+      const a = B[i - 1], c = B[i + 1];
+      if (!a || !c || !B[i]) { g.text('Click the middle candle of a gap', P[0].x + 6, P[0].y, { size: 10 }); return; }
+      const bull = c.l > a.h, bear = c.h < a.l;
+      if (!bull && !bear) { g.vline(P[0].x, { dash: [3, 4], width: 1, color: alpha(g.color, 0.5) }); g.text('No gap at this candle', P[0].x + 6, P[0].y, { size: 10, bg: alpha(g.color, 0.8) }); return; }
+      const top = bull ? c.l : a.l, bot = bull ? a.h : c.h, col = d.color ? g.color : bull ? '#22AB94' : '#F7525F';
+      let end = B.length - 1, filled = false;
+      for (let k = i + 2; k < B.length; k++) if (bull ? B[k].l <= bot : B[k].h >= top) { end = k; filled = true; break; }
+      zoneBox(g, api.xi(i - 1), filled ? api.xi(end) : api.plotW, api.y(top), api.y(bot), col, `${bull ? 'Bull' : 'Bear'} FVG${filled ? ' ✓' : ''}`);
+    },
+    handles: (P, api, d) => { const i = Math.round(api.idx(d.pts[0].t)), b = api.bars[i]; return [{ x: P[0].x, y: b ? api.y((b.h + b.l) / 2) : P[0].y }]; },
+  });
+  tool('obzone', {
+    name: 'Order block', n: 1,
+    // a down candle is a bullish block, an up candle a bearish one; it holds until a close through its far side
+    draw(g, P, d) {
+      const api = g.api, B = api.bars, i = Math.round(api.idx(d.pts[0].t)), b = B[i];
+      if (!b) return;
+      const bull = b.c < b.o, col = d.color ? g.color : bull ? '#3D8BFD' : '#F5A623';
+      let end = B.length - 1, broken = false;
+      for (let k = i + 1; k < B.length; k++) if (bull ? B[k].c < b.l : B[k].c > b.h) { end = k; broken = true; break; }
+      zoneBox(g, api.xi(i) - api.spacing / 2, broken ? api.xi(end) : api.plotW, api.y(b.h), api.y(b.l), col, `${bull ? 'Bull' : 'Bear'} OB${broken ? ' ✗' : ''}`);
+    },
+    handles: (P, api, d) => { const i = Math.round(api.idx(d.pts[0].t)), b = api.bars[i]; return [{ x: P[0].x, y: b ? api.y((b.h + b.l) / 2) : P[0].y }]; },
+  });
   function profile(g, i0, i1, xLeft, xRight) {
     const api = g.api, B = api.bars, T = api.theme;
     i0 = Math.max(0, i0); i1 = Math.min(B.length - 1, i1);
@@ -903,6 +938,7 @@
     { id: 'forecast', title: 'Forecasting, volume & measuring', sections: [
       ['Forecasting', ['long', 'short', 'forecast', 'barspattern', 'ghostfeed', 'sector']],
       ['Volume-based', ['avwap', 'vpfixed', 'vpanchored']],
+      ['Smart money', ['fvgzone', 'obzone']],
       ['Measurers', ['pricerange', 'daterange', 'measure']],
     ] },
     { id: 'shapes', title: 'Brushes, arrows & shapes', sections: [
@@ -967,6 +1003,8 @@
     barspattern: `<path d="M5 4v16M10 7v10M15 5v12M20 9v8"/><path d="M4 8h2v6H4zM9 9h2v5H9zM14 8h2v7h-2zM19 11h2v4h-2z"/>`,
     ghostfeed: `<path d="M5 6v12M10 8v8M15 5v10M20 9v10" stroke-dasharray="2 2"/><path d="M4 9h2v6H4zM9 10h2v4H9zM14 7h2v5h-2zM19 12h2v5h-2z"/>`,
     sector: `<path d="M4 20V5a15 15 0 0 1 15 15z"/>${dot(4, 20)}`,
+    fvgzone: `<path d="M6 3v6M6 15v6M12 6v4M18 13v5"/><rect x="4" y="9" width="4" height="6"/><rect x="16" y="9" width="4" height="4"/><path d="M8 11h12" stroke-dasharray="2 2"/>`,
+    obzone: `<rect x="3" y="8" width="18" height="7" rx="1"/><path d="M6 4v4M6 15v5"/><path d="M3 11.5h18" stroke-dasharray="2 2"/>`,
     avwap: `<path d="M3 18c4 0 5-9 9-9s5 5 9 3"/><path d="M5 4v16M5 8h-2v6h2" />`,
     vpfixed: `<path d="M3 4v16M3 6h8M3 9h12M3 12h17M3 15h10M3 18h6"/><path d="M21 4v16"/>`,
     vpanchored: `<path d="M4 4v16M4 6h8M4 9h12M4 12h16M4 15h10M4 18h6"/>${dot(4, 12)}`,

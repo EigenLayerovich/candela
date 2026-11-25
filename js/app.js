@@ -31,7 +31,7 @@
   function futuresInfo(t, chart) {
     const parts = [];
     if (isFinite(t.funding)) {
-      let f = `Funding ${t.funding >= 0 ? '+' : ''}${(t.funding * 100).toFixed(4)}%`;
+      let f = `Funding ${t.funding >= 0 ? '+' : ''}${(t.funding * 100).toFixed(4)}%${t.fundingHours === 1 ? ' per hour' : ''}`;
       const left = t.nextFunding - Date.now();
       if (left > 0) f += ` · next in ${Math.floor(left / 3600e3)}h ${Math.floor((left % 3600e3) / 60e3)}m`;
       parts.push(f);

@@ -133,7 +133,7 @@ closes (or every 15 seconds for "as soon as it appears"). The server uses the ap
 script code, so alerts behave exactly as they do in the browser. Crypto data comes from the exchanges'
 public APIs; no key needed.
 
-## Crypto exchanges: Binance, Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex (+ futures)
+## Crypto exchanges: Binance, Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex, Hyperliquid (+ futures)
 
 Binance is the default. Charts, watchlist, comparisons and alerts also work with **Bybit, OKX, Bitget,
 KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex** spot markets: public data, no account or key.
@@ -141,7 +141,7 @@ KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex** spot markets: public
 - **Symbol search**: the chips under the search box pick where to look: *All*, one exchange, or
   *Stocks & forex*. *All* shows the best matches on every exchange once you type. Exchange symbols show
   as `BTC/USD` with a small tag (`BY` Bybit, `OK` OKX, `BG` Bitget, `KC` KuCoin, `GT` Gate.io,
-  `MX` MEXC, `HX` HTX, `KR` Kraken, `CB` Coinbase, `BF` Bitfinex); the chart title
+  `MX` MEXC, `HX` HTX, `KR` Kraken, `CB` Coinbase, `BF` Bitfinex, `HL` Hyperliquid, `HLS` Hyperliquid spot); the chart title
   names the exchange.
 - **Across exchanges** (side panel, under the watchlist): the chart's coin on every exchange, with the
   last price, 24h change and the difference from the chart you're looking at, refreshed every 15
@@ -179,6 +179,26 @@ timeframe (custom ones too), indicators, watchlist, comparisons, alerts.
 - Both exchanges block some countries, including the US. Where they're blocked, the search and the panel
   say so.
 - If the live feed stops (some networks block it), Candela switches to refreshing every 4 seconds.
+
+### Hyperliquid
+
+Pick the *Hyperliquid* chip in the symbol search for its perpetuals, or *Hyperliquid Spot* for spot pairs
+(HYPE/USDC and the rest). No account or key, it works in a plain browser tab too, with live updates.
+
+- **Perpetuals** show as `BTC/USDC PERP`. Under the title: the funding rate (Hyperliquid pays funding
+  **every hour**, so the rate is per hour), mark and oracle (index) price, and open interest.
+- **HIP-3 markets**, the perpetuals other teams run on Hyperliquid (stocks, indexes and commodities
+  such as TSLA, NVDA or GOLD), are included. They're written with the market's name in front, e.g.
+  `XYZ.TSLA/USDC PERP` for Hyperliquid's `xyz:TSLA`; searching `TSLA` finds them.
+- Coins Hyperliquid trades in thousands show their real names: `KPEPE` is Hyperliquid's kPEPE (1,000 PEPE);
+  searching `PEPE` finds it.
+- Hyperliquid gives the latest **5,000 candles** of each timeframe (about 3½ days of 1-minute candles,
+  7 months of 1H, years of daily), so you can't scroll further back than that. 6H is built from smaller
+  candles.
+- Watchlist, comparisons, *Across exchanges* ("Hyperliquid perp" and "Hyperliquid spot"), alerts (also on
+  the alert server), paper trading and every indicator work as on the other exchanges.
+- Hyperliquid limits how many requests one computer makes per minute; if a burst hits the limit, Candela
+  waits a moment and tries again.
 
 ## Stocks, ETFs and forex
 

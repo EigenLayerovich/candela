@@ -1,4 +1,8 @@
-## New in 1.18.0
+## New in 1.19.0
+
+- **Hyperliquid**: perpetuals (with hourly funding, mark and oracle price, open interest), the HIP-3 stock, index and commodity perps (TSLA, NVDA, GOLD…), and spot pairs (HYPE/USDC…). Live charts, every timeframe, watchlist, alerts and paper trading. No key needed.
+
+## In 1.18.0
 
 - **Alerts**: an expiry date, active hours (e.g. 09:00–17:00 Mon–Fri), zone alerts on rectangles (price enters or leaves), an **alert log** of everything that fired and why, and dedicated **Discord** and **Slack** channels on the alert server (each alert can pick its channels).
 - **Strategy Tester**: Long / short breakdown, profit by weekday and by day, **Monte Carlo** (1,000 resampled histories: range of returns and drawdowns), and **slippage**.

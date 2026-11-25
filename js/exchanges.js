@@ -1,5 +1,5 @@
 /* Candela — more crypto exchanges: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex,
- * plus Binance and Bybit perpetual futures (Binance spot lives in data.js).
+ * Hyperliquid (perpetuals and spot), plus Binance and Bybit perpetual futures (Binance spot lives in data.js).
  *
  * Symbols are written EXCHANGE:BASE/QUOTE, e.g. "KRAKEN:BTC/USD", "KUCOIN:ETH/USDT". Every exchange gets
  * the same five operations: symbol list, candle history, live updates, a 24-hour ticker, and the candle
@@ -582,8 +582,125 @@
     },
   };
 
-  const EXCHANGES = { BYBIT, OKX, BITGET, KUCOIN, GATE, MEXC, HTX, KRAKEN, COINBASE, BITFINEX, BINANCEF, BYBITF };
-  const ID_RE = /^(BYBIT|OKX|BITGET|KUCOIN|GATE|MEXC|HTX|KRAKEN|COINBASE|BITFINEX|BINANCEF|BYBITF):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
+  // ---------------------------------------------------------------- Hyperliquid
+  // One POST endpoint for everything ({ type: … }); candles go back 5,000 candles per timeframe. Perpetuals are
+  // the main market, plus the HIP-3 markets other teams run on it (stock, index and commodity perps such as
+  // xyz:TSLA, written XYZ.TSLA here), and spot (HYPE/USDC…). Coin names in the API differ from what we show
+  // (kPEPE, xyz:TSLA, @107 for a spot pair), so each adapter keeps a map.
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+  async function hlPost(ex, body, tries = 0) {
+    const r = await fetch('https://api.hyperliquid.xyz/info', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    if (r.status === 403 || r.status === 451) throw err(`Hyperliquid refused the request (HTTP ${r.status}).`, { fatal: true, geo: true });
+    // a request budget per minute: wait and try again (1.5 s, 3 s, 6 s)
+    if (r.status === 429) {
+      if (tries < 3) { await sleep(1500 * 2 ** tries); return hlPost(ex, body, tries + 1); }
+      throw err('Hyperliquid: too many requests, try again in a moment');
+    }
+    const j = await r.json().catch(() => undefined);
+    if (j === undefined || !r.ok) throw err(`Hyperliquid: HTTP ${r.status}`);
+    return j;
+  }
+  let hlSpotMeta = null; // shared by the spot list and the perps' collateral names
+  const spotMeta = (ex) => (hlSpotMeta = hlSpotMeta || hlPost(ex, { type: 'spotMeta' }).catch((e) => { hlSpotMeta = null; throw e; }));
+  function hyperliquid(spot) {
+    return {
+      id: spot ? 'HYPERLIQUIDS' : 'HYPERLIQUID', name: spot ? 'Hyperliquid Spot' : 'Hyperliquid', short: spot ? 'Hyperliquid spot' : 'Hyperliquid perp',
+      tag: spot ? 'HLS' : 'HL', futures: !spot, cors: true, quotes: ['USDC', 'USDT0', 'USDH', 'USDE'],
+      tfs: Object.fromEntries(['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d', '3d', '1w', '1M'].map((x) => [x, x])),
+      coins: null, // "BTC/USDC" -> API coin name
+      dexes: null, // HIP-3 market names: ['xyz', 'flx', …]
+      async pairs() {
+        const out = [], coins = {};
+        if (spot) {
+          const m = await spotMeta(this), names = Object.fromEntries(m.tokens.map((t) => [t.index, t.name]));
+          for (const u of m.universe) {
+            const b = String(names[u.tokens[0]] || '').toUpperCase(), q = String(names[u.tokens[1]] || '').toUpperCase();
+            if (!b || !q || coins[`${b}/${q}`]) continue;
+            coins[`${b}/${q}`] = u.name;
+            out.push([b, q]);
+          }
+        } else {
+          const dexes = ((await hlPost(this, { type: 'perpDexs' })) || []).filter(Boolean).map((d) => d.name);
+          this.dexes = dexes;
+          const tokenNames = await spotMeta(this).then((m) => Object.fromEntries(m.tokens.map((t) => [t.index, t.name])), () => ({}));
+          const metas = await Promise.all([null, ...dexes].map((dex) => hlPost(this, dex ? { type: 'meta', dex } : { type: 'meta' }).catch(() => null)));
+          metas.forEach((m, i) => {
+            if (!m || !m.universe) return;
+            const q = i && m.collateralToken != null && tokenNames[m.collateralToken] ? String(tokenNames[m.collateralToken]).toUpperCase() : 'USDC';
+            for (const u of m.universe) {
+              if (u.isDelisted) continue;
+              const b = u.name.toUpperCase().replace(':', '.'); // kPEPE -> KPEPE, xyz:TSLA -> XYZ.TSLA
+              coins[`${b}/${q}`] = u.name;
+              out.push([b, q, u.name.includes(':') ? u.name.split(':')[1] : /^k[A-Z]/.test(u.name) ? u.name.slice(1) : null]); // found as TSLA, PEPE
+            }
+          });
+        }
+        this.coins = coins;
+        return out;
+      },
+      async coin(b, q) {
+        if (!this.coins) { try { await pairs(this.id); } catch (e) { /* guess below */ } }
+        const c = this.coins && this.coins[`${b}/${q}`];
+        if (c) return c;
+        if (spot || this.coins) throw err(`Hyperliquid has no ${b}/${q}${spot ? ' spot' : ''} market`, { fatal: true });
+        return b.includes('.') ? b.replace('.', ':').replace(/^[^:]+/, (d) => d.toLowerCase()) : b;
+      },
+      history(b, q, tf, opts) {
+        return pages(opts, 5000, async (n, end) => {
+          const coin = await this.coin(b, q), endT = end || Date.now();
+          const rows = await hlPost(this, { type: 'candleSnapshot', req: { coin, interval: tf, startTime: Math.floor(endT - n * TF[tf]), endTime: Math.floor(endT) } });
+          if (rows === null) throw err(`Hyperliquid has no ${b}/${q} market`, { fatal: true });
+          return (rows || []).map((r) => ({ t: r.t, o: +r.o, h: +r.h, l: +r.l, c: +r.c, v: +r.v }));
+        });
+      },
+      stream(b, q, tf, onBar, onStatus) {
+        return liveOrPoll(this, b, q, tf, onBar, onStatus, (bar, status) => {
+          let stop = null, stopped = false;
+          this.coin(b, q).then((coin) => {
+            if (stopped) return;
+            stop = socket('wss://api.hyperliquid.xyz/ws', {
+              onOpen: (send) => send({ method: 'subscribe', subscription: { type: 'candle', coin, interval: tf } }),
+              onMessage: (m) => { const d = m.data; if (m.channel === 'candle' && d && d.s === coin && d.i === tf) bar({ t: d.t, o: +d.o, h: +d.h, l: +d.l, c: +d.c, v: +d.v }); },
+              onStatus: status, ping: { every: 30000, msg: { method: 'ping' } },
+            });
+          }, () => status && status('reconnecting'));
+          return () => { stopped = true; if (stop) stop(); };
+        });
+      },
+      // every market's prices come in one reply; keep it a few seconds for watchlists with many symbols
+      ctxCache: {},
+      async contexts(dex) {
+        const k = dex || '', c = this.ctxCache[k];
+        if (c && Date.now() - c.t < 3000) return c.p;
+        const p = hlPost(this, spot ? { type: 'spotMetaAndAssetCtxs' } : dex ? { type: 'metaAndAssetCtxs', dex } : { type: 'metaAndAssetCtxs' }).then(([meta, ctxs]) => {
+          const by = {};
+          if (spot) for (const x of ctxs) by[x.coin] = x;
+          else meta.universe.forEach((u, i) => { by[u.name] = ctxs[i]; });
+          return by;
+        });
+        this.ctxCache[k] = { t: Date.now(), p };
+        p.catch(() => { delete this.ctxCache[k]; });
+        return p;
+      },
+      async ticker(b, q) {
+        const coin = await this.coin(b, q), dex = !spot && coin.includes(':') ? coin.split(':')[0] : null;
+        const x = (await this.contexts(dex))[coin];
+        if (!x) throw err(`Hyperliquid: no price for ${b}/${q}`);
+        const c = +(x.midPx || x.markPx), t = { c, o: +x.prevDayPx || c, vq: +x.dayNtlVlm };
+        if (!spot) {
+          // funding is paid every hour on Hyperliquid
+          const hr = 3600e3;
+          Object.assign(t, { funding: +x.funding, fundingHours: 1, nextFunding: Math.ceil(Date.now() / hr) * hr, mark: +x.markPx, index: +x.oraclePx, oiValue: +x.openInterest * +x.markPx });
+        }
+        return t;
+      },
+    };
+  }
+  const HYPERLIQUID = hyperliquid(false);
+  const HYPERLIQUIDS = hyperliquid(true);
+
+  const EXCHANGES = { BYBIT, OKX, BITGET, KUCOIN, GATE, MEXC, HTX, KRAKEN, COINBASE, BITFINEX, BINANCEF, BYBITF, HYPERLIQUID, HYPERLIQUIDS };
+  const ID_RE = /^(BYBIT|OKX|BITGET|KUCOIN|GATE|MEXC|HTX|KRAKEN|COINBASE|BITFINEX|BINANCEF|BYBITF|HYPERLIQUID|HYPERLIQUIDS):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
   function parse(sym) {
     const m = ID_RE.exec(sym || '');
     return m ? { ex: EXCHANGES[m[1]], b: m[2], q: m[3] } : null;
@@ -598,11 +715,11 @@
     if (!lists[exId]) {
       lists[exId] = EXCHANGES[exId].pairs().then((ps) => {
         const seen = new Set(), out = [];
-        for (const [b, q] of ps) {
+        for (const [b, q, alias] of ps) {
           const B = String(b).toUpperCase(), Q = String(q).toUpperCase(), id = `${exId}:${B}/${Q}`;
           if (!/^[A-Z0-9.]+$/.test(B) || !/^[A-Z0-9.]+$/.test(Q) || seen.has(id)) continue;
           seen.add(id);
-          out.push({ id, base: B, quote: Q, key: B + Q, alt: B.replace(/^\d+/, '') }); // alt: PEPE for futures' 1000PEPE
+          out.push({ id, base: B, quote: Q, key: B + Q, alt: alias ? String(alias).toUpperCase() : B.replace(/^\d+/, '') }); // alt: PEPE for futures' 1000PEPE (or the exchange's own alias)
         }
         return out;
       }).catch((e) => {

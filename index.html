@@ -49,6 +49,12 @@
     <button id="alertBtn" class="hbtn" title="Create alert (Alt+A)">
       <svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span>Alert</span>
     </button>
+    <button id="replayBtn" class="hbtn" title="Bar Replay: play history back candle by candle">
+      <svg viewBox="0 0 24 24"><path d="M4 5v14M8 12l10-7v14z"/></svg><span>Replay</span>
+    </button>
+    <button id="testerBtn" class="hbtn" title="Strategy Tester: backtest a strategy script">
+      <svg viewBox="0 0 24 24"><path d="M4 19h16M6 16l4-5 3 3 5-7"/><circle cx="18" cy="7" r="1.6"/></svg><span>Strategy</span>
+    </button>
     <div class="spacer"></div>
     <button id="pctBtn" class="hbtn small" title="Percent scale">%</button>
     <button id="logBtn" class="hbtn small" title="Logarithmic price scale">log</button>
@@ -69,6 +75,7 @@
     <nav id="toolbar" class="toolbar" aria-label="Drawing tools"></nav>
     <section class="chart-wrap">
       <div id="charts" class="charts" data-layout="1"></div>
+      <section id="tester" class="tester hidden" aria-label="Strategy Tester"></section>
     </section>
     <aside id="side" class="side">
       <div class="side-sec grow">
@@ -100,6 +107,7 @@
   <script src="js/chart.js"></script>
   <script src="js/script.js"></script>
   <script src="js/alerts-core.js"></script>
+  <script src="js/backtest.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

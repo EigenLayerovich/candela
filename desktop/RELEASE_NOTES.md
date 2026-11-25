@@ -1,4 +1,9 @@
-## New in 1.9.0
+## New in 1.10.0
+
+- **Bar Replay**: play history back candle by candle (Replay, top bar), with play/pause, speed and step.
+- **Strategy Tester**: write a strategy in Candela Script (buy / sell / sellshort / cover rules, optional stop and target) and backtest it: net profit, win rate, profit factor, drawdown, equity curve vs buy & hold, list of trades, trades marked on the chart. Two example strategies are in the script editor.
+
+## In 1.9.0
 
 - **Renko, Kagi and Point & Figure** chart types (with Auto/fixed box size and reversal under *Box…*). Heikin Ashi was already there.
 

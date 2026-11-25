@@ -302,6 +302,42 @@ week shows the daily SMA as of its last day. On a lower-timeframe chart the curr
 with the live price until the day closes, as on other charting apps. It works for oscillators too
 (an RSI on 1D below a 1H chart). Custom scripts always use the chart's timeframe.
 
+## Bar Replay
+
+**Replay** (top bar) plays history back as if it were live, to practise reading the chart. Click it, then
+click the candle where the replay should start (scroll left first to start further back). Everything after
+that candle disappears; the controls at the bottom play the candles back (0.5 to 30 per second), step one
+candle at a time (or `Shift+→`), or pick a new start. Indicators, drawings and the Strategy Tester follow the
+replay, and indicators set to another timeframe only see the past. Alerts don't fire during a replay.
+**Exit replay** returns to live data.
+
+## Strategy Tester (backtesting)
+
+A strategy is a Candela Script with trading rules:
+
+```
+name "EMA cross strategy"
+strategy capital 10000 size 100 commission 0.1 stop 5
+fast = ema(close, 9)
+slow = ema(close, 21)
+buy crossover(fast, slow)
+sell crossunder(fast, slow)
+```
+
+- `buy` opens a long position (or turns a short into a long), `sell` closes it; `sellshort` opens a short
+  (or turns a long into a short), `cover` closes it.
+- The optional `strategy` line sets defaults: starting `capital`, order `size` (% of equity), `commission`
+  (% per order), `stop` loss and take profit `target` (% from the entry; 0 = off).
+- Rules are checked when a candle closes and orders fill at the next candle's open, so the test never looks
+  ahead. Stops and targets are checked inside each candle; if one candle touches both, the stop counts.
+
+Add a strategy to a chart and the **Strategy Tester** opens below it (or click **Strategy** at the top):
+*Overview* (net profit, win rate, profit factor, max drawdown, average trade, buy & hold, commission, and
+the equity curve against buy & hold), *List of trades* (click one to see it on the chart), and *Properties*
+(change capital, size, commission, stop and target without editing the script). The trades are marked on the
+chart. It tests the candles loaded on the chart: scroll left to load more history. Two examples are in the
+script editor: *Strategy: EMA cross* and *Strategy: RSI long/short*.
+
 ## Renko, Kagi and Point & Figure
 
 Pick them in the chart-type menu. They ignore time: a new brick, line or column appears only when the
@@ -379,6 +415,7 @@ new version over the old one (quit Candela from the tray first); your charts and
 | Custom timeframe | type a number (`2`, then `D`, Enter = 2 days) |
 | Tools | `Alt+T` trend, `Alt+H` horizontal, `Alt+J` horizontal ray, `Alt+V` vertical, `Alt+C` crossline, `Alt+F` fib, `Alt+M` measure, `Alt+Shift+R` rectangle |
 | Finish a path / polyline | double-click or `Enter` |
+| Bar Replay: next candle | `Shift+→` |
 | Alert | `Alt+A`, or right-click the chart → *Add alert at …* |
 | Delete drawing | select it, then `Del` |
 | Focus chart N in a layout | `Alt+1` … `Alt+6` |
@@ -453,6 +490,7 @@ It shows up in the Indicators dialog automatically, with a settings panel genera
 - `js/indicators.js`: indicator math + definitions
 - `js/script.js`: Candela Script: lexer, parser, checker, interpreter, built-in functions
 - `js/alerts-core.js`: alert rules shared by the browser and the server
+- `js/backtest.js`: the Strategy Tester's backtest engine
 - `js/data.js`: Binance REST/WebSocket, Twelve Data, demo feed, CSV parser
 - `js/exchanges.js`: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex, Binance and
   Bybit futures, and building missing timeframes

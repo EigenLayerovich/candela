@@ -101,6 +101,8 @@
     customTfs: [], // your own timeframes: "2d", "3h", "2w"…
     toolGroups: {}, // the tool each toolbar group shows (the last one used)
     favTools: [], // starred drawing tools (the heart menu)
+    tester: { open: false, tab: 'overview', height: 280 }, // Strategy Tester panel
+    replaySpeed: 2, // Bar Replay: candles per second
     watchlist: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'LINKUSDT', 'AVAXUSDT', 'LTCUSDT'],
   };
   function loadState() {
@@ -233,6 +235,8 @@
       this.cmps = new Map(); // compare id -> { c, bars, interval, stop, noMore }
       this.tfFeeds = new Map(); // timeframe -> candles for indicators set to another timeframe
       c.tfKey = cfg.tf;
+      this.replay = null; // Bar Replay state
+      this._nStrat = c.indicators.filter((i) => i.def.strategy).length;
     }
 
     get symbol() { return this.cfg.symbol; }
@@ -244,6 +248,7 @@
       this.stopCompares();
       this.stopTfFeeds();
       this.stopInfo();
+      this.exitReplay(false);
       this.chart.destroy();
       this.el.remove();
     }
@@ -263,6 +268,122 @@
       }));
       save();
       if (this.status !== 'loading') this.syncTfFeeds();
+      // a strategy was just added: open the Strategy Tester, as other charting apps do
+      const nStrat = c.indicators.filter((i) => i.def.strategy).length;
+      if (nStrat > this._nStrat && this === active && !state.tester.open) openTester();
+      this._nStrat = nStrat;
+      testerRefreshSoon(this);
+    }
+
+    // ---- Bar Replay: hide what came after a chosen candle, then play the candles back one at a time.
+    // Alerts don't fire during a replay, and indicators on other timeframes only see the past.
+    startReplayPick() {
+      if (!this.chart.raw.length) { toast('Nothing to replay yet: the chart has no data.', 'warn'); return; }
+      setActive(this);
+      if (this.replay) this.pauseReplay();
+      toast('Click the chart where the replay should start (Esc cancels). Scroll left first to start further back.', 'info', 5000);
+      this.chart.pickTime((t) => this.beginReplay(t));
+      updateHeader();
+    }
+    beginReplay(t) {
+      const c = this.chart;
+      if (!this.replay) {
+        if (this.stop) this.stop();
+        this.stop = null;
+        c.live = false;
+        this.replay = { full: c.raw.slice(), idx: 0, timer: null, playing: false };
+      } else this.pauseReplay();
+      const R = this.replay;
+      let idx = R.full.length - 1;
+      while (idx > 0 && R.full[idx].t > t) idx--;
+      R.idx = Math.max(Math.min(20, R.full.length - 1), idx);
+      c.setData(R.full.slice(0, R.idx + 1), c.rawInterval);
+      c.rightOffset = 12;
+      c._clampView();
+      this.replayTfSources();
+      this.alignCompares();
+      this.setStatus('replay');
+      this.renderReplayBar();
+      testerRefreshSoon(this, 0);
+      updateHeader();
+    }
+    replayStep() {
+      const R = this.replay;
+      if (!R) return;
+      if (R.idx >= R.full.length - 1) { this.pauseReplay(); toast('The replay reached the latest candle. Exit the replay to go back to live data.', 'info', 5000); return; }
+      R.idx++;
+      this.chart.updateBar(R.full[R.idx]);
+      this.replayTfSources();
+      this.alignCompares();
+      this.renderReplayBar();
+      testerRefreshSoon(this);
+    }
+    playReplay() {
+      const R = this.replay;
+      if (!R) return;
+      if (R.playing) { this.pauseReplay(); return; }
+      R.playing = true;
+      const go = () => {
+        if (this.replay !== R || !R.playing) return;
+        this.replayStep();
+        if (R.playing) R.timer = setTimeout(go, 1000 / (state.replaySpeed || 2));
+      };
+      R.timer = setTimeout(go, 1000 / (state.replaySpeed || 2));
+      this.renderReplayBar();
+    }
+    pauseReplay() {
+      const R = this.replay;
+      if (!R) return;
+      R.playing = false;
+      clearTimeout(R.timer);
+      this.renderReplayBar();
+    }
+    exitReplay(reload = true) {
+      const R = this.replay;
+      this.chart.cancelPick();
+      if (!R) return;
+      clearTimeout(R.timer);
+      this.replay = null;
+      if (this.replayBar) { this.replayBar.remove(); this.replayBar = null; }
+      if (reload) this.load(this.symbol, this.tf);
+      if (this === active) updateHeader();
+    }
+    // indicators on another timeframe: only candles up to the replay, with the current one built from the chart
+    replayTfSources() {
+      const c = this.chart, raw = c.raw;
+      if (!this.replay || !raw.length) return;
+      const end = raw[raw.length - 1].t + c.rawInterval;
+      for (const f of this.tfFeeds.values()) {
+        if (!f.bars.length) continue;
+        const arr = f.bars.filter((b) => b.t < end), tl = arr[arr.length - 1];
+        if (tl && MD.TF[f.tf] > c.rawInterval) {
+          const parts = raw.filter((b) => b.t >= tl.t);
+          if (parts.length) arr[arr.length - 1] = { ...MD.resample(parts, f.tf)[0], t: tl.t };
+        }
+        c.setTfSource(f.tf, arr);
+      }
+    }
+    renderReplayBar() {
+      const R = this.replay;
+      if (!R) return;
+      if (!this.replayBar) {
+        const btn = (cls, title, svgPath, fn) => { const b = h('button', { class: 'rp-btn ' + cls, title, onclick: fn }); b.innerHTML = `<svg viewBox="0 0 24 24">${svgPath}</svg>`; return b; };
+        const speed = h('select', { class: 'rp-speed', title: 'Speed (candles per second)' }, [0.5, 1, 2, 5, 10, 30].map((v) => h('option', { value: v }, v + '×')));
+        speed.value = String(state.replaySpeed || 2);
+        speed.addEventListener('change', () => { state.replaySpeed = +speed.value; save(); speed.blur(); });
+        this.replayBar = h('div', { class: 'replay-bar', role: 'toolbar', 'aria-label': 'Bar Replay' },
+          h('span', { class: 'rp-tag' }, 'REPLAY'),
+          btn('rp-pick', 'Pick a new start candle', '<path d="M5 4v16M19 5l-9 7 9 7z"/>', () => this.startReplayPick()),
+          btn('rp-play', 'Play / pause', '', () => this.playReplay()),
+          btn('rp-step', 'Next candle (Shift+→)', '<path d="M5 5l9 7-9 7zM17 4v16"/>', () => { this.pauseReplay(); this.replayStep(); }),
+          speed,
+          h('span', { class: 'rp-time' }),
+          btn('rp-exit', 'Exit the replay and go back to live data', '<path d="M6 6l12 12M18 6L6 18"/>', () => this.exitReplay()));
+        this.el.appendChild(this.replayBar);
+      }
+      const bar = R.full[R.idx];
+      this.replayBar.querySelector('.rp-play').innerHTML = `<svg viewBox="0 0 24 24">${R.playing ? '<path d="M7 5v14M17 5v14"/>' : '<path d="M7 4l12 8-12 8z"/>'}</svg>`;
+      this.replayBar.querySelector('.rp-time').textContent = `${this.chart.fmtTimeFull(bar.t)} · ${R.full.length - 1 - R.idx} candles left`;
     }
 
     // ---- perpetual futures: funding rate, mark price and open interest under the title, every 15 s
@@ -322,7 +443,7 @@
         return;
       }
       if (!alive()) return;
-      c.setTfSource(tf, f.bars);
+      if (this.replay) this.replayTfSources(); else c.setTfSource(tf, f.bars);
       await this.fillTfHistory(f);
       if (!alive()) return;
       f.stop = MD.stream(sym, tf, (b) => {
@@ -331,7 +452,7 @@
         if (n && f.bars[n - 1].t === b.t) f.bars[n - 1] = b;
         else if (!n || b.t > f.bars[n - 1].t) f.bars.push(b);
         else { const i = f.bars.findIndex((x) => x.t === b.t); if (i < 0) return; f.bars[i] = b; }
-        c.setTfSource(tf, f.bars);
+        if (!this.replay) c.setTfSource(tf, f.bars);
       });
     }
     // older candles until they reach well before the chart's first bar (so a 200-day average is ready there)
@@ -349,7 +470,7 @@
           const add = older.filter((b) => b.t < f.bars[0].t);
           if (!add.length) { f.noMore = true; break; }
           f.bars = add.concat(f.bars);
-          this.chart.setTfSource(f.tf, f.bars);
+          if (this.replay) this.replayTfSources(); else this.chart.setTfSource(f.tf, f.bars);
         }
       } finally { f.filling = false; }
     }
@@ -368,6 +489,7 @@
     }
 
     async load(sym, tf = this.tf) {
+      if (this.replay) this.exitReplay(false);
       const gen = ++this.gen, c = this.chart;
       if (!MD.ensureTf(tf)) tf = '1h';
       if (!MD.supportsTf(sym, tf)) {
@@ -492,6 +614,7 @@
       markerAlertsOnChartBar(this, c.raw.length !== n);
       checkAlerts(this.symbol, bar.c);
       if (this === active) updateDocTitle();
+      testerRefreshSoon(this);
     }
 
     async loadOlder() {
@@ -503,6 +626,11 @@
         const limit = isStock(this.symbol) ? 5000 : 1000; // stocks: one request costs the same however many bars
         const older = await MD.history(this.symbol, this.tf, { limit, endTime: c.raw[0].t - 1 });
         if (gen !== this.gen) return;
+        if (this.replay) {
+          const add = older.filter((b) => b.t < this.replay.full[0].t);
+          this.replay.full = add.concat(this.replay.full);
+          this.replay.idx += add.length;
+        }
         if (older.length < limit) this.noMore = true;
         if (older.length) {
           c.prependBars(older);
@@ -683,6 +811,7 @@
     renderStatus();
     updateDocTitle();
     save();
+    if (state.tester.open) runTester();
   }
 
   // Next symbol for a newly added chart: the next watchlist symbol not already on screen.
@@ -872,7 +1001,7 @@
     const s = active.status, el = $('#status');
     const mins = (ms) => (ms >= 90e3 ? Math.round(ms / 60e3) + ' min' : '1 min');
     const labels = {
-      live: 'Live', connecting: 'Connecting', reconnecting: 'Reconnecting', demo: 'Demo data', static: 'CSV data', loading: 'Loading',
+      live: 'Live', connecting: 'Connecting', reconnecting: 'Reconnecting', demo: 'Demo data', static: 'CSV data', loading: 'Loading', replay: 'Replay',
       polling: `Updates every ${mins(active.statusDetail || 60e3)}`, closed: 'Market closed', limit: 'Daily data limit', needskey: 'Needs API key', error: 'No data',
     };
     const tips = {
@@ -1042,6 +1171,8 @@
       save();
     });
     $('#alertBtn').addEventListener('click', () => openAlertDialog());
+    $('#replayBtn').addEventListener('click', () => { if (active.replay) active.exitReplay(); else if (active.chart.picking) { active.chart.cancelPick(); updateHeader(); } else active.startReplayPick(); });
+    $('#testerBtn').addEventListener('click', () => (state.tester.open ? closeTester() : openTester()));
     $('#logBtn').addEventListener('click', () => {
       const c = active.chart;
       active.cfg.log = !active.cfg.log;
@@ -1081,6 +1212,10 @@
     more.classList.toggle('wide', inMore && tfName(tf).length > 3);
     $('#chartType').value = active.cfg.chartType || 'candles';
     $('#brickBtn').hidden = !active.chart.isBrick;
+    $('#replayBtn').classList.toggle('active', !!active.replay || !!active.chart.picking);
+    $('#replayBtn span').textContent = active.replay ? 'Exit replay' : 'Replay';
+    $('#replayBtn').title = active.replay ? 'Exit the replay and go back to live data' : 'Bar Replay: play history back candle by candle';
+    $('#testerBtn').classList.toggle('active', !!state.tester.open);
     $('#logBtn').classList.toggle('active', !!active.cfg.log);
     const comparing = active.chart.compares.some((c) => c.visible);
     $('#pctBtn').classList.toggle('active', comparing || !!active.cfg.percent);
@@ -1885,6 +2020,38 @@ plot basis "Average" color blue width 2
 
   const EXAMPLES = [
     {
+      title: 'Strategy: EMA cross', desc: 'Backtest: buy when the fast EMA crosses above the slow one, with a stop loss',
+      code: `// A strategy: Candela buys and sells on these signals and shows the result in the
+// Strategy Tester (button "Strategy" at the top). Orders fill at the next candle's open.
+name "EMA cross strategy"
+strategy capital 10000 size 100 commission 0.1 stop 5
+input fastLen = 9 "Fast EMA" min 1
+input slowLen = 21 "Slow EMA" min 2
+
+fast = ema(close, fastLen)
+slow = ema(close, slowLen)
+
+buy crossover(fast, slow)
+sell crossunder(fast, slow)
+
+plot fast "Fast" color blue
+plot slow "Slow" color orange
+`,
+    },
+    {
+      title: 'Strategy: RSI long/short', desc: 'Backtest: long when RSI leaves oversold, short when it leaves overbought',
+      code: `// Long when RSI climbs back above 30, short when it falls back below 70.
+// Each signal also closes the opposite position.
+name "RSI reversal strategy"
+strategy capital 10000 size 100 commission 0.1 stop 4 target 8
+input length = 14 "RSI length" min 2
+
+r = rsi(close, length)
+buy crossover(r, 30)
+sellshort crossunder(r, 70)
+`,
+    },
+    {
       title: 'RSI with signal line', desc: 'Oscillator with a smoothed signal, zones and cross markers',
       code: `// RSI with a smoothed signal line, an overbought/oversold zone,
 // and markers where RSI leaves the oversold zone.
@@ -2638,6 +2805,175 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     notify(msg);
   }
 
+  // ---- Strategy Tester: backtests a strategy script on the active chart's candles
+  const BT = window.CandelaBacktest;
+  const tester = { slot: null, scriptId: null, result: null, timer: null, error: null };
+  const strategiesOn = (slot) => (slot ? slot.chart.indicators.filter((i) => i.def.strategy) : []);
+  const fmtMoney = (v) => (v < 0 ? '−' : '') + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pctTxt = (v) => (isFinite(v) ? `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}%` : '–');
+
+  function openTester() {
+    state.tester.open = true;
+    save();
+    $('#tester').classList.remove('hidden');
+    $('.chart-wrap').classList.add('with-tester');
+    $('.chart-wrap').style.setProperty('--tester-h', state.tester.height + 'px');
+    runTester();
+    updateHeader();
+  }
+  function closeTester() {
+    state.tester.open = false;
+    save();
+    $('#tester').classList.add('hidden');
+    $('.chart-wrap').classList.remove('with-tester');
+    for (const s of slots) s.chart.setTrades(null);
+    updateHeader();
+  }
+  function testerRefreshSoon(slot, delay = 800) {
+    if (!state.tester.open || slot !== active) return;
+    if (tester.timer && delay) return; // already scheduled
+    clearTimeout(tester.timer);
+    tester.timer = setTimeout(() => { tester.timer = null; runTester(); }, delay);
+  }
+  function runTester() {
+    if (!state.tester.open) return;
+    const slot = active;
+    for (const s of slots) if (s !== slot) s.chart.setTrades(null);
+    const strats = strategiesOn(slot);
+    tester.slot = slot;
+    tester.result = null;
+    tester.error = null;
+    if (!strats.length) { slot.chart.setTrades(null); renderTester(); return; }
+    const ind = strats.find((i) => i.def.scriptId === tester.scriptId) || strats[0];
+    tester.scriptId = ind.def.scriptId;
+    const bars = slot.chart.raw;
+    try {
+      const out = ind.def.calc(bars, ind.params);
+      const props = { ...ind.def.strategy, ...((slot.cfg.strategyProps || {})[ind.def.scriptId] || {}) };
+      tester.result = BT.backtest(bars, out, props);
+      tester.result.name = ind.def.name;
+    } catch (e) { tester.error = e.line ? `Script error, line ${e.line}: ${e.message}` : e.message; }
+    slot.chart.setTrades(tester.result ? [...tester.result.trades, ...(tester.result.openTrade ? [tester.result.openTrade] : [])] : null);
+    renderTester();
+  }
+
+  function renderTester() {
+    const box = $('#tester'), slot = tester.slot || active, r = tester.result, strats = strategiesOn(slot);
+    box.innerHTML = '';
+    // resize handle on the top edge
+    const grip = h('div', { class: 'tt-grip', title: 'Drag to resize' });
+    grip.addEventListener('pointerdown', (e) => {
+      const y0 = e.clientY, h0 = state.tester.height, wrap = $('.chart-wrap');
+      grip.setPointerCapture(e.pointerId);
+      const move = (ev) => { state.tester.height = Math.max(150, Math.min(wrap.clientHeight * 0.75, h0 + (y0 - ev.clientY))); wrap.style.setProperty('--tester-h', state.tester.height + 'px'); };
+      const up = () => { grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); save(); positionDividers(); };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+    });
+    const tabs = h('div', { class: 'tt-tabs', role: 'tablist' }, [['overview', 'Overview'], ['trades', 'List of trades'], ['props', 'Properties']].map(([k, label]) =>
+      h('button', { class: 'tt-tab' + (state.tester.tab === k ? ' on' : ''), role: 'tab', onclick: () => { state.tester.tab = k; save(); renderTester(); } }, label)));
+    const pick = strats.length > 1 ? h('select', { class: 'tt-pick', onchange: (e) => { tester.scriptId = e.target.value; runTester(); } },
+      strats.map((i) => h('option', { value: i.def.scriptId, selected: i.def.scriptId === tester.scriptId }, i.def.name))) : null;
+    const c = slot.chart, raw = c.raw;
+    const range = raw.length ? `${bare(slot.symbol)} · ${tfName(slot.tf)} · ${raw.length} candles, ${c.fmtTimeFull(raw[0].t)} – ${c.fmtTimeFull(raw[raw.length - 1].t)}${slot.replay ? ' (replay)' : ''}` : '';
+    box.append(grip, h('div', { class: 'tt-head' },
+      h('b', {}, 'Strategy Tester'), pick || (r ? h('span', { class: 'tt-name' }, r.name) : null), tabs,
+      h('span', { class: 'tt-range muted' }, range),
+      h('button', { class: 'icon-btn', title: 'Close', onclick: closeTester }, '✕')));
+    const body = h('div', { class: 'tt-body' });
+    box.appendChild(body);
+    if (!strats.length) {
+      body.append(h('div', { class: 'tt-empty' },
+        h('p', {}, 'Add a strategy to this chart to backtest it. A strategy is a Candela Script with buy / sell (and sellshort / cover) rules.'),
+        h('button', { class: 'btn primary', onclick: () => openScriptEditor() }, 'Open the script editor'), h('span', { class: 'muted' }, ' then pick "Strategy: EMA cross" in Examples.')));
+      return;
+    }
+    if (tester.error) { body.append(h('div', { class: 'tt-empty err' }, tester.error)); return; }
+    if (!r) return;
+    const st = r.stats, cls = (v) => (v > 0 ? 'up' : v < 0 ? 'down' : '');
+    if (state.tester.tab === 'overview') {
+      const cell = (label, value, sub, k = '') => h('div', { class: 'tt-stat' }, h('span', { class: 'muted' }, label), h('b', { class: k }, value), sub ? h('small', { class: k }, sub) : null);
+      body.append(h('div', { class: 'tt-overview' },
+        h('div', { class: 'tt-stats' },
+          cell('Net profit', fmtMoney(st.netProfit), pctTxt(st.netProfitPct), cls(st.netProfit)),
+          cell('Closed trades', String(st.trades), `${st.wins} won · ${st.losses} lost`),
+          cell('Percent profitable', st.trades ? st.winRate.toFixed(1) + '%' : '–'),
+          cell('Profit factor', st.trades ? (isFinite(st.profitFactor) ? st.profitFactor.toFixed(2) : '∞') : '–'),
+          cell('Max drawdown', fmtMoney(-st.maxDrawdown), pctTxt(-st.maxDrawdownPct), st.maxDrawdown ? 'down' : ''),
+          cell('Avg trade', fmtMoney(st.avgTrade), `${st.avgBars.toFixed(1)} candles on average`, cls(st.avgTrade)),
+          cell('Buy & hold', pctTxt(st.buyHoldPct), 'over the same candles', cls(st.buyHoldPct)),
+          cell('Commission paid', fmtMoney(st.commission)),
+          cell('Open position', r.openTrade ? `${r.openTrade.dir > 0 ? 'Long' : 'Short'} ${fmtMoney(r.openTrade.pnl)}` : 'None', r.openTrade ? pctTxt(r.openTrade.pnlPct) : '', r.openTrade ? cls(r.openTrade.pnl) : '')),
+        h('div', { class: 'tt-curve' }, h('canvas', { id: 'ttCanvas' }), h('div', { class: 'tt-legend muted' }, h('i', { class: 'sw eq' }), 'Equity ', h('i', { class: 'sw bh' }), 'Buy & hold'))));
+      requestAnimationFrame(drawEquity);
+    } else if (state.tester.tab === 'trades') {
+      const all = [...r.trades, ...(r.openTrade ? [r.openTrade] : [])];
+      let cum = 0;
+      const rows = all.map((t, i) => { cum += t.open ? 0 : t.pnl; return { t, i, cum }; }).reverse();
+      body.append(h('div', { class: 'tt-table-wrap' }, h('table', { class: 'tt-table' },
+        h('thead', {}, h('tr', {}, ['#', 'Type', 'Entry', 'Entry price', 'Exit', 'Exit price', 'Exit reason', 'Size', 'Profit', 'Profit %', 'Cum. profit', 'Candles'].map((x) => h('th', {}, x)))),
+        h('tbody', {}, rows.map(({ t, i, cum }) => h('tr', { class: t.open ? 'open' : '', title: 'Show on the chart', onclick: () => { slot.chart.scrollToTime(t.entryT); } },
+          h('td', {}, String(i + 1)), h('td', { class: t.dir > 0 ? 'long' : 'short' }, t.dir > 0 ? 'Long' : 'Short'),
+          h('td', {}, c.fmtTimeFull(t.entryT)), h('td', {}, c.fmtPrice(t.entryPrice)),
+          h('td', {}, t.open ? 'open' : c.fmtTimeFull(t.exitT)), h('td', {}, c.fmtPrice(t.exitPrice)), h('td', {}, t.reason),
+          h('td', {}, (+t.qty.toPrecision(4)).toString()), h('td', { class: cls(t.pnl) }, fmtMoney(t.pnl)), h('td', { class: cls(t.pnl) }, pctTxt(t.pnlPct)),
+          h('td', { class: cls(cum) }, t.open ? '' : fmtMoney(cum)), h('td', {}, String(t.bars))))))));
+      if (!all.length) body.append(h('div', { class: 'tt-empty muted' }, 'No trades on these candles. Scroll the chart left to load more history.'));
+    } else {
+      const ind = strategiesOn(slot).find((i) => i.def.scriptId === tester.scriptId), def = ind.def.strategy;
+      const props = (slot.cfg.strategyProps || (slot.cfg.strategyProps = {}))[tester.scriptId] || {};
+      const field = (key, label, unit, help) => {
+        const dflt = def[key] ?? BT.DEFAULTS[key];
+        const inp = h('input', { type: 'number', min: 0, step: 'any', value: props[key] ?? '', placeholder: String(dflt) });
+        inp.addEventListener('change', () => {
+          const all = slot.cfg.strategyProps[tester.scriptId] = { ...(slot.cfg.strategyProps[tester.scriptId] || {}) };
+          if (inp.value === '' || !(+inp.value >= 0)) delete all[key]; else all[key] = +inp.value;
+          save();
+          runTester();
+        });
+        return h('label', {}, h('span', {}, label), h('span', { class: 'tt-in' }, inp, h('small', { class: 'muted' }, unit)), h('small', { class: 'muted tt-help' }, help));
+      };
+      body.append(h('div', { class: 'tt-props form' },
+        field('capital', 'Initial capital', '', 'Money the strategy starts with'),
+        field('size', 'Order size', '% of equity', 'How much of the current equity each trade uses (up to 100)'),
+        field('commission', 'Commission', '% per order', 'Paid when entering and when leaving a trade'),
+        field('stop', 'Stop loss', '% from entry', '0 or empty: no stop loss'),
+        field('target', 'Take profit', '% from entry', '0 or empty: no take profit'),
+        h('p', { class: 'muted' }, 'Empty fields use the script\'s "strategy" line (shown greyed). Orders fill at the next candle\'s open; if a candle touches both the stop and the target, the stop counts.'),
+        h('div', {}, h('button', { class: 'btn ghost', onclick: () => { delete slot.cfg.strategyProps[tester.scriptId]; save(); runTester(); } }, 'Use script defaults'))));
+    }
+  }
+  // equity curve and buy & hold, on the same money scale
+  function drawEquity() {
+    const cv = document.getElementById('ttCanvas'), r = tester.result;
+    if (!cv || !r) return;
+    const box = cv.parentElement, d = window.devicePixelRatio || 1, W = box.clientWidth - 16, H = box.clientHeight - 40; // room for the legend
+    if (W < 20 || H < 20) return;
+    cv.width = W * d; cv.height = H * d; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    const ctx = cv.getContext('2d'), css = getComputedStyle(document.documentElement), col = (v) => css.getPropertyValue(v).trim();
+    ctx.scale(d, d);
+    const eq = r.equity, bars = (tester.slot || active).chart.raw, cap = r.options.capital, n = eq.length;
+    if (!n) return;
+    const bh = bars.map((b) => cap * (b.c / bars[0].o));
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < n; i++) { for (const v of [eq[i], bh[i]]) if (isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
+    if (!(hi > lo)) { hi = lo + 1; }
+    const pad = (hi - lo) * 0.08, x = (i) => (i / Math.max(1, n - 1)) * (W - 4) + 2, y = (v) => H - 4 - ((v - lo + pad) / (hi - lo + 2 * pad)) * (H - 8);
+    ctx.strokeStyle = col('--border'); ctx.setLineDash([3, 4]);
+    ctx.beginPath(); ctx.moveTo(0, y(cap)); ctx.lineTo(W, y(cap)); ctx.stroke(); ctx.setLineDash([]);
+    const path = (arr, color, width, dash) => { ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash || []); ctx.beginPath(); let on = false; arr.forEach((v, i) => { if (!isFinite(v)) return; on ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)); on = true; }); ctx.stroke(); ctx.setLineDash([]); };
+    path(bh, col('--muted'), 1, [4, 3]);
+    // the area under the equity curve, green above the starting capital and red below
+    ctx.save();
+    ctx.beginPath(); eq.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)))); ctx.lineTo(x(n - 1), y(cap)); ctx.lineTo(x(0), y(cap)); ctx.closePath();
+    ctx.clip();
+    ctx.fillStyle = col('--up'); ctx.globalAlpha = 0.15; ctx.fillRect(0, 0, W, y(cap));
+    ctx.fillStyle = col('--down'); ctx.fillRect(0, y(cap), W, H);
+    ctx.restore();
+    path(eq, col('--accent'), 1.8);
+  }
+  new ResizeObserver(() => { if (state.tester.open && state.tester.tab === 'overview') drawEquity(); }).observe(document.getElementById('tester'));
+
   // ---- "a new version is available": compare with the latest release on GitHub
   // Only where the version is known: the Windows app, or the page served by node server.js.
   const RELEASES = 'https://github.com/EigenLayerovich/candela/releases/latest';
@@ -3129,6 +3465,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   document.addEventListener('keydown', (e) => {
     const typing = e.target.matches('input, select, textarea');
     if (e.key === 'Enter' && !typing && !modalOpen() && active.chart.finishCreating()) { e.preventDefault(); return; } // finish a path / polyline
+    if (e.key === 'ArrowRight' && e.shiftKey && !typing && !modalOpen() && active.replay) { e.preventDefault(); active.pauseReplay(); active.replayStep(); return; }
+    if (e.key === 'Escape' && active && active.chart.cancelPick()) { updateHeader(); return; }
     if (e.key === 'Escape') {
       if (document.querySelector('.tool-menu')) { closeToolMenu(); return; }
       if (modalOpen()) { $('#modalRoot .backdrop')._close(); return; }
@@ -3180,6 +3518,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   startTickers();
   syncMarkerFeeds();
   probeServer();
+  if (state.tester.open) openTester();
   setTimeout(checkForUpdate, 4000);
   setInterval(checkForUpdate, 6 * 3600e3);
   if (!PREVIEW) MD.loadBStocks().then(() => {

@@ -15,7 +15,9 @@
   }
   const fail = (msg, at) => { throw new ScriptError(msg, at && at.line, at && at.col); };
 
-  const KEYWORDS = ['name', 'short', 'overlay', 'pane', 'input', 'plot', 'level', 'fill', 'mark'];
+  const KEYWORDS = ['name', 'short', 'overlay', 'pane', 'input', 'plot', 'level', 'fill', 'mark', 'strategy', 'buy', 'sell', 'sellshort', 'cover'];
+  // strategy statements; older scripts may use these words as variable names, which still works
+  const SIGNALS = ['buy', 'sell', 'sellshort', 'cover'];
   const WORD_OPS = ['and', 'or', 'not'];
   const SOURCES = ['open', 'high', 'low', 'close', 'volume', 'hl2', 'hlc3', 'ohlc4'];
   const TIME_SERIES = ['time', 'bar_index', 'hour', 'minute', 'dayofweek', 'dayofmonth', 'month', 'year'];
@@ -151,7 +153,7 @@
       if (t.type === 'color') { p++; return { type: 'color', value: t.value, line: t.line, col: t.col }; }
       if (t.type === 'str') fail('Text in quotes can only be used as a label, not in a calculation', t);
       if (t.type === 'ident') {
-        if (KEYWORDS.includes(t.value)) fail(`"${t.value}" starts a statement, so it can't be used inside a calculation`, t);
+        if (KEYWORDS.includes(t.value) && !SIGNALS.includes(t.value)) fail(`"${t.value}" starts a statement, so it can't be used inside a calculation`, t);
         if (WORD_OPS.includes(t.value)) fail(`"${t.value}" needs a value on its left`, t);
         p++;
         if (at('punct', '(')) {
@@ -245,12 +247,21 @@
             st.label = optLabel();
             st.opts = parseOptions({ color: 1, position: ['above', 'below'], above: 'flag:position', below: 'flag:position' });
             break;
+          case 'strategy':
+            st = base;
+            st.opts = parseOptions({ capital: 1, size: 1, commission: 1, stop: 1, target: 1 });
+            break;
+          case 'buy': case 'sell': case 'sellshort': case 'cover':
+            st = { ...base, expr: parseExpr() };
+            st.label = optLabel();
+            st.opts = parseOptions({});
+            break;
         }
       } else if (t.type === 'ident' && peek(1) && peek(1).type === 'punct' && peek(1).value === '=') {
         p += 2;
         st = { kind: 'assign', name: t.value, nameTok: t, expr: parseExpr(), line: t.line, col: t.col };
       } else {
-        fail(`A line should be an assignment like  x = sma(close, 20)  or start with plot, input, level, fill, mark, name or overlay. Found ${describe(t)}`, t);
+        fail(`A line should be an assignment like  x = sma(close, 20)  or start with plot, input, level, fill, mark, name, overlay, or (strategies) buy, sell, sellshort, cover. Found ${describe(t)}`, t);
       }
       if (!atEnd()) fail(`Unexpected ${describe(toks[p])}. Each statement goes on its own line`, here());
       stmts.push(st);
@@ -471,7 +482,7 @@
       }
     };
     const claim = (name, tok, isInput) => {
-      if (KEYWORDS.includes(name)) fail(`"${name}" starts a statement, so it can't be used as a name`, tok);
+      if (KEYWORDS.includes(name) && !SIGNALS.includes(name)) fail(`"${name}" starts a statement, so it can't be used as a name`, tok);
       if (BUILTIN_NAMES.includes(name) || WORD_OPS.includes(name)) fail(`"${name}" is a built-in name, so it can't be ${isInput ? 'an input' : 'assigned'}. Pick another name`, tok);
       if (FUNCS[name]) fail(`"${name}" is a built-in function, so it can't be used as a variable name`, tok);
       if (isInput && defined.has(name)) fail(`There is already a variable or input called "${name}"`, tok);
@@ -479,13 +490,13 @@
     };
     const seen = {};
     for (const st of stmts) {
-      if (['name', 'short', 'overlay', 'pane'].includes(st.kind)) {
+      if (['name', 'short', 'overlay', 'pane', 'strategy'].includes(st.kind)) {
         if (seen[st.kind]) fail(`"${st.kind}" is given more than once`, st);
         seen[st.kind] = true;
       }
       if (st.kind === 'input') claim(st.name, st.nameTok, true);
       if (st.kind === 'assign') { walk(st.expr); claim(st.name, st.nameTok, false); }
-      if (st.kind === 'plot' || st.kind === 'mark' || st.kind === 'level') walk(st.expr);
+      if (st.kind === 'plot' || st.kind === 'mark' || st.kind === 'level' || SIGNALS.includes(st.kind)) walk(st.expr);
       if (st.kind === 'fill') { walk(st.a); walk(st.b); }
       for (const v of Object.values(st.opts || {})) if (v && v.type) walk(v);
     }
@@ -588,7 +599,8 @@
   function compile(code, scriptId = 'draft') {
     const stmts = parse(code);
     check(stmts);
-    const meta = { name: 'Custom script', short: null, overlay: false };
+    const meta = { name: 'Custom script', short: null, overlay: false, pane: false };
+    let strategy = null;
     const inputs = [], plots = [], fills = [], levels = [];
     let bandFill = null, plotN = 0, markN = 0, fillN = 0;
     const steps = []; // runtime steps in order
@@ -612,7 +624,19 @@
         case 'name': meta.name = st.value || meta.name; break;
         case 'short': meta.short = st.value; break;
         case 'overlay': meta.overlay = true; break;
-        case 'pane': meta.overlay = false; break;
+        case 'pane': meta.overlay = false; meta.pane = true; break;
+        case 'strategy': {
+          // defaults for the Strategy Tester (all changeable there)
+          const o = st.opts, num = (k, what) => numOpt(o[k], what);
+          strategy = strategy || { rules: [] };
+          Object.assign(strategy, { capital: num('capital', 'capital'), size: num('size', 'size'), commission: num('commission', 'commission'), stop: num('stop', 'stop'), target: num('target', 'target') });
+          break;
+        }
+        case 'buy': case 'sell': case 'sellshort': case 'cover':
+          strategy = strategy || { rules: [] };
+          if (!strategy.rules.includes(st.kind)) strategy.rules.push(st.kind);
+          steps.push({ kind: 'signal', key: '$' + st.kind, expr: st.expr, st });
+          break;
         case 'input': {
           const inp = { key: st.name, label: st.label || st.name, def: st.value };
           if (st.vtype === 'source') inp.type = 'source';
@@ -666,7 +690,9 @@
         }
       }
     }
-    if (!plots.length && !fills.length && !bandFill) fail('Nothing to draw yet: add a line like  plot sma(close, 20)', { line: (stmts[stmts.length - 1] || {}).line || 1, col: 1 });
+    if (strategy && !strategy.rules.length) fail('A strategy needs rules: buy, sell, sellshort or cover, e.g.  buy crossover(ema(close, 9), ema(close, 21))', stmts.find((x) => x.kind === 'strategy'));
+    if (strategy && !meta.pane) meta.overlay = true; // trades are shown on the price chart
+    if (!plots.length && !fills.length && !bandFill && !strategy) fail('Nothing to draw yet: add a line like  plot sma(close, 20)', { line: (stmts[stmts.length - 1] || {}).line || 1, col: 1 });
 
     const toNumbers = (v, n, node, what) => {
       if (typeof v === 'string' || (isArr(v) && v.some((x) => typeof x === 'string'))) fail(`${what} needs numbers, but this is a color`, node);
@@ -694,6 +720,8 @@
             const v = toNumbers(ev(step.expr, ctx), n, step.expr, step.bool ? 'mark' : 'plot');
             out[step.key] = step.bool ? v.map((x) => (truthy(x) ? 1 : 0)) : v;
             if (step.colorExpr) out[step.key + '$c'] = toColors(ev(step.colorExpr, ctx), n, step.colorExpr);
+          } else if (step.kind === 'signal') {
+            out[step.key] = toNumbers(ev(step.expr, ctx), n, step.expr, step.st.kind).map((x) => (truthy(x) ? 1 : 0));
           } else if (step.kind === 'fill') {
             out[step.key + 'a'] = toNumbers(ev(st.a, ctx), n, st.a, 'fill');
             out[step.key + 'b'] = toNumbers(ev(st.b, ctx), n, st.b, 'fill');
@@ -704,6 +732,7 @@
       },
     };
     if (meta.bandColor) definition.bandColor = meta.bandColor;
+    if (strategy) definition.strategy = strategy;
     return definition;
   }
 
@@ -728,7 +757,7 @@
         else if (WORD_OPS.includes(t.value)) cls = 'tk-op';
         else if (FUNCS[t.value]) cls = 'tk-fn';
         else if (BUILTIN_NAMES.includes(t.value)) cls = 'tk-bi';
-        else if (['color', 'width', 'style', 'position', 'min', 'max', 'step', 'histogram', 'line', 'dots', 'columns', 'above', 'below'].includes(t.value)) cls = 'tk-opt';
+        else if (['color', 'width', 'style', 'position', 'min', 'max', 'step', 'histogram', 'line', 'dots', 'columns', 'above', 'below', 'capital', 'size', 'commission', 'stop', 'target'].includes(t.value)) cls = 'tk-opt';
       } else if (t.type === 'punct') cls = 'tk-op';
       if (t.type === 'color') {
         html += `<span class="tk-col"><i class="tk-swatch" style="background:${t.text.length === 4 || t.text.length === 7 || t.text.length === 5 || t.text.length === 9 ? t.text : 'transparent'}"></i>${esc(t.text)}</span>`;
@@ -750,6 +779,11 @@
     ['mark condition "Buy" below color green', 'Draw a marker on bars where condition is true (above or below)'],
     ['level 70', 'A dashed horizontal line (pane indicators)'],
     ['fill a, b color fade(blue, 0.1)', 'Shade the area between two series or two levels'],
+    ['buy condition', 'Strategy: open a long position (or turn a short into a long) at the next bar\'s open'],
+    ['sell condition', 'Strategy: close the long position'],
+    ['sellshort condition', 'Strategy: open a short position (or turn a long into a short)'],
+    ['cover condition', 'Strategy: close the short position'],
+    ['strategy capital 10000 size 100 commission 0.1 stop 2 target 4', 'Strategy defaults: starting capital, % of equity per trade, commission %, stop loss %, take profit % (0 = off)'],
   ];
   const OPERATORS = [
     ['+ - * / % ^', 'Arithmetic, bar by bar'],

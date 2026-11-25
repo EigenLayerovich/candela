@@ -201,6 +201,8 @@
       this.rawInterval = 3600e3;
       this.brickOpts = {};    // { renko: { mode: 'atr'|'fixed', size }, kagi: { mode: 'atr'|'pct'|'fixed', value }, pnf: { mode, size, rev } }
       this.brickInfo = '';    // e.g. "Renko · box 250", shown after the title
+      this.trades = null;     // strategy trades to mark on the chart (Strategy Tester)
+      this.picking = null;    // a function waiting for a click on the chart (Bar Replay: pick the start)
       this.title = '';
       this.info = ''; // a line under the title (funding rate, open interest… on futures)
       this.live = false;
@@ -1003,6 +1005,7 @@
         }
         for (const ind of inds) if (ind.def.scale !== 'volume') this._drawIndicator(ind, p, a, b);
         if (p === this.main) {
+          this._drawTrades(p);
           this._drawAlerts(p);
           if (!this.drawingsHidden) for (const dr of this.drawings) this._drawDrawing(dr, dr === this.selected);
           if (this.creating) this._drawDrawing(this.creating, true);
@@ -1021,7 +1024,75 @@
       ctx.fillRect(0, this.H - this.timeH, this.W, 1);
       this._drawTimeAxis(timeTicks);
       this._drawCrosshair();
+      if (this.picking && this.hover && this.hover.x < this.plotW) {
+        // Bar Replay: show where the replay would start
+        const x = Math.round(this.xAt(Math.round(this.idxAt(this.hover.x)))) + 0.5;
+        ctx.save();
+        ctx.fillStyle = withAlpha(T.line, 0.08);
+        ctx.fillRect(x, 0, this.plotW - x, this.H - this.timeH);
+        ctx.strokeStyle = T.line;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, this.H - this.timeH); ctx.stroke();
+        ctx.font = '600 11px ' + getComputedStyle(this.el).fontFamily;
+        const label = 'Click to start the replay here', w = ctx.measureText(label).width + 14;
+        const lx = Math.min(x + 6, this.plotW - w - 4);
+        ctx.fillStyle = T.line;
+        ctx.fillRect(lx, 8, w, 20);
+        ctx.fillStyle = '#fff';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, lx + 7, 18);
+        ctx.restore();
+      }
     }
+
+    // ---- strategy trades: entry and exit marks joined by a dotted line, green for a profit, red for a loss
+    setTrades(trades) { this.trades = trades && trades.length ? trades : null; this.invalidate(); }
+    _drawTrades(p) {
+      const list = this.trades;
+      if (!list || !this.bars.length) return;
+      const ctx = this.ctx, T = this.theme, a = this.idxAt(0) - 2, b = this.idxAt(this.plotW) + 2;
+      ctx.save();
+      ctx.font = '600 10px ' + getComputedStyle(this.el).fontFamily;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const mark = (x, y, up, color, text) => {
+        const s = 5, tip = up ? y + 3 : y - 3, base = up ? tip + s * 1.6 : tip - s * 1.6;
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.moveTo(x, tip); ctx.lineTo(x - s, base); ctx.lineTo(x + s, base); ctx.closePath(); ctx.fill();
+        const w = ctx.measureText(text).width + 8, ty = up ? base + 9 : base - 9;
+        ctx.fillRect(x - w / 2, ty - 7, w, 14);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(text, x, ty + 0.5);
+      };
+      for (const tr of list) {
+        const i0 = this.timeToIndex(tr.entryT), i1 = this.timeToIndex(tr.exitT);
+        if (i1 < a || i0 > b) continue;
+        const x0 = this.xAt(i0), x1 = this.xAt(i1), y0 = this.yOf(p, tr.entryPrice), y1 = this.yOf(p, tr.exitPrice);
+        const res = tr.pnl > 0 ? T.up : T.down;
+        ctx.strokeStyle = withAlpha(res, 0.8);
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+        ctx.setLineDash([]);
+        const long = tr.dir > 0;
+        mark(x0, y0, long, long ? T.line : '#E040FB', long ? 'Long' : 'Short');
+        if (!tr.open) mark(x1, y1, !long, res, `${tr.pnlPct >= 0 ? '+' : ''}${tr.pnlPct.toFixed(1)}%`);
+      }
+      ctx.restore();
+    }
+
+    // center the chart on a time (Strategy Tester: jump to a trade)
+    scrollToTime(t) {
+      if (!this.bars.length) return;
+      this.rightOffset = this.plotW / (2 * this.spacing) + this.timeToIndex(t) - this.lastIndex - 0.5;
+      this._clampView();
+      this._checkHistory();
+      this._viewChanged();
+      this._legendIdx = -2;
+      this.invalidate();
+    }
+    // wait for a click on the chart; cb gets the time of the clicked candle
+    pickTime(cb) { this.picking = cb; this.select(null); this.invalidate(); }
+    cancelPick() { if (!this.picking) return false; this.picking = null; this.invalidate(); return true; }
 
     _drawLevels(p) {
       const ctx = this.ctx, T = this.theme;
@@ -1629,6 +1700,13 @@
         const { x, y } = pos(e), reg = this._region(x, y);
         c.setPointerCapture(e.pointerId);
         this.downAt = { x, y };
+        if (this.picking && reg.r === 'plot') {
+          const cb = this.picking, t = this.indexToTime(Math.round(this.idxAt(x)));
+          this.picking = null;
+          cb(t);
+          this.invalidate();
+          return;
+        }
         if (reg.r === 'plot' && this.tool !== 'cursor') {
           if (reg.p !== this.main) return;
           const tool = DRAW() && DRAW().TOOLS[this.tool];

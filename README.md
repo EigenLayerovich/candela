@@ -301,6 +301,21 @@ week shows the daily SMA as of its last day. On a lower-timeframe chart the curr
 with the live price until the day closes, as on other charting apps. It works for oscillators too
 (an RSI on 1D below a 1H chart). Custom scripts always use the chart's timeframe.
 
+## Line style
+
+In an indicator's settings, the **Style** tab has, for every line: its color, a **thickness** from 1 to 4,
+and a line-type menu with **Price line** (a dotted line across the chart at the latest value) and the
+line types *Line*, *Line with breaks*, *Step line*, *Step line with breaks* and *Step line with diamonds*.
+Step lines suit indicators on another timeframe (a daily SMA on a 4H chart), and the diamonds mark each
+new value. *Line* joins over missing values; the *with breaks* types leave a gap.
+
+## Updates
+
+The Windows app (and the page served by `node server.js`) checks GitHub for a newer release when it
+starts and every 6 hours, and shows a small notice with what's new and a **Download** button. Install the
+new version over the old one (quit Candela from the tray first); your charts and alerts are kept.
+*Skip this version* hides the notice until the next release.
+
 ## Controls
 
 | Action | How |

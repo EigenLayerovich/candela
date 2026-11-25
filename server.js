@@ -36,6 +36,9 @@ let HOST = process.env.HOST || '127.0.0.1';
 let TOKEN = process.env.CANDELA_TOKEN || '';
 let DATA_FILE = process.env.CANDELA_DATA || path.join(ROOT, 'data', 'server-state.json');
 const VERSION = 1;
+// the app's version (package.json), so the page can tell when a newer release is out
+let APP_VERSION = '';
+try { APP_VERSION = require(path.join(ROOT, 'package.json')).version || ''; } catch (e) { /* not packaged with it */ }
 const events = new EventEmitter(); // 'fired' (event) — the desktop app shows these as Windows notifications
 
 // ---------------------------------------------------------------------- shared app code
@@ -443,7 +446,7 @@ async function handleApi(req, res, url) {
   const m = req.method, p = url.pathname;
   let mm;
   if (p === '/api/status' && m === 'GET') {
-    return send(res, 200, { ok: true, app: 'candela-alert-server', version: VERSION, alerts: db.alerts.filter((a) => a.active).length, channels: channelsConfigured(), uptime: Math.round(process.uptime()) });
+    return send(res, 200, { ok: true, app: 'candela-alert-server', version: VERSION, appVersion: APP_VERSION, alerts: db.alerts.filter((a) => a.active).length, channels: channelsConfigured(), uptime: Math.round(process.uptime()) });
   }
   if (p === '/api/events' && m === 'GET') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });

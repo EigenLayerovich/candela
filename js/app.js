@@ -186,7 +186,7 @@
       c.chartType = cfg.chartType || 'candles';
       for (const s of cfg.indicators || []) {
         const def = resolveDef(s.type);
-        if (def) c.addIndicator(def, s.params || {}, { colors: s.colors, visible: s.visible, weight: s.weight, tf: s.tf });
+        if (def) c.addIndicator(def, s.params || {}, { colors: s.colors, visible: s.visible, weight: s.weight, tf: s.tf, styles: s.styles });
       }
       c.percentMode = !!cfg.percent;
       c.onCompareAction = (act, id) => {
@@ -255,6 +255,7 @@
       const c = this.chart, order = (i) => c.panes.indexOf(i.pane);
       this.cfg.indicators = [...c.indicators].sort((a, b) => order(a) - order(b)).map((i) => ({
         type: i.def.id, params: i.params, colors: i.colors, visible: i.visible, tf: i.tf || undefined,
+        styles: Object.keys(i.styles || {}).length ? i.styles : undefined,
         weight: i.pane === c.main ? undefined : +i.pane.weight.toFixed(3),
       }));
       save();
@@ -1550,13 +1551,51 @@
     });
   }
 
+  // the line styles of the Style tab, as in other charting apps
+  const LINE_TYPE_ICONS = {
+    line: '<svg viewBox="0 0 24 24"><path d="M3 16c3-7 6-7 8-3s5 4 10-5"/></svg>',
+    linebr: '<svg viewBox="0 0 24 24"><path d="M3 16l4-6M10 13l3 2M16 12l5-6"/></svg>',
+    step: '<svg viewBox="0 0 24 24"><path d="M3 19v-6h5V6h5v9h4V9h4"/></svg>',
+    stepbr: '<svg viewBox="0 0 24 24"><path d="M3 19v-6h4M10 6h3v5M13 15v0h4V9h4"/></svg>',
+    stepdia: '<svg viewBox="0 0 24 24"><path d="M3 19v-6h5V6h5v9h4V9h4"/><path d="M8 4l2 2-2 2-2-2zM13 13l2 2-2 2-2-2zM17 7l2 2-2 2-2-2z" fill="currentColor"/></svg>',
+  };
+  const LINE_TYPE_NAMES = [['line', 'Line'], ['linebr', 'Line with breaks'], ['step', 'Step line'], ['stepbr', 'Step line with breaks'], ['stepdia', 'Step line with diamonds']];
+  // the dropdown: Price line toggle, then the line types
+  function openLineTypeMenu(anchor, getStyle, set) {
+    document.querySelector('.ltype-menu')?.remove();
+    const st = getStyle();
+    const menu = h('div', { class: 'ltype-menu', role: 'menu' });
+    const toggle = h('button', { class: 'ltype-toggle' + (st.priceLine ? ' on' : ''), role: 'menuitemcheckbox', 'aria-checked': String(st.priceLine), onclick: () => {
+      const on = !getStyle().priceLine;
+      set('priceLine', on);
+      toggle.classList.toggle('on', on);
+      toggle.setAttribute('aria-checked', String(on));
+    } }, h('span', {}, 'Price line'), h('i', { class: 'switch' }));
+    menu.appendChild(toggle);
+    menu.appendChild(h('div', { class: 'ltype-sep' }));
+    for (const [k, name] of LINE_TYPE_NAMES) {
+      const item = h('button', { class: 'ltype-item' + (k === st.type ? ' on' : ''), role: 'menuitemradio', 'aria-checked': String(k === st.type), onclick: () => { set('type', k); close(); } });
+      item.innerHTML = LINE_TYPE_ICONS[k];
+      item.append(name);
+      menu.appendChild(item);
+    }
+    const r = anchor.getBoundingClientRect();
+    menu.style.left = Math.min(r.left, window.innerWidth - 240) + 'px';
+    menu.style.top = (r.bottom + 4 + 260 > window.innerHeight ? Math.max(8, r.top - 264) : r.bottom + 4) + 'px';
+    document.body.appendChild(menu);
+    const away = (e) => { if (!menu.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) close(); };
+    const esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    function close() { menu.remove(); document.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', esc, true); }
+    setTimeout(() => { document.addEventListener('mousedown', away, true); document.addEventListener('keydown', esc, true); }, 0);
+  }
+
   function openIndicatorSettings(slot, id) {
     const chart = slot.chart;
     const ind = chart.indicators.find((i) => i.id === id);
     if (!ind) return;
-    const def = ind.def, orig = { params: { ...ind.params }, colors: { ...ind.colors } };
-    const params = { ...ind.params }, colors = { ...ind.colors };
-    const apply = () => chart.updateIndicator(id, params, colors);
+    const def = ind.def, orig = { params: { ...ind.params }, colors: { ...ind.colors }, styles: clone(ind.styles || {}) };
+    const params = { ...ind.params }, colors = { ...ind.colors }, styles = clone(ind.styles || {});
+    const apply = () => chart.updateIndicator(id, params, colors, styles);
 
     const inputsBox = h('div', { class: 'form' });
     // compute on another timeframe (not for volume, which belongs to the chart's own candles, or scripts)
@@ -1627,8 +1666,37 @@
       ctl.addEventListener('input', () => { colors[key] = applyAlpha(ctl.value, a); apply(); });
       styleBox.appendChild(h('label', {}, h('span', {}, label), ctl));
     };
+    // lines: color, thickness 1-4 and line type (Line, Step line…, with a price line option)
+    const lineRow = (pl) => {
+      const st = styles[pl.key] || (styles[pl.key] = {});
+      const cur = () => chart.plotStyle({ styles, colors }, pl);
+      const set = (k, v) => { st[k] = v; apply(); };
+      const kids = [];
+      if (!pl.dynamic) {
+        const c0 = colors[pl.key] || pl.color, a = alphaOf(c0);
+        const ctl = h('input', { type: 'color', value: toHex(c0), title: 'Color' });
+        ctl.addEventListener('input', () => { colors[pl.key] = applyAlpha(ctl.value, a); apply(); });
+        kids.push(ctl);
+      }
+      const grade = cur().grade || (cur().width <= 1.5 ? 1 : Math.min(4, Math.round(cur().width)));
+      const widths = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': 'Thickness' });
+      for (const g of [1, 2, 3, 4]) {
+        const b = h('button', { class: 'seg-btn' + (g === grade ? ' on' : ''), title: `Thickness ${g}`, 'aria-checked': String(g === grade), role: 'radio', onclick: () => {
+          set('width', g);
+          for (const x of widths.children) x.classList.toggle('on', x === b);
+        } }, h('i', { class: 'seg-line', style: `height:${[1, 2, 3, 4][g - 1]}px` }));
+        widths.appendChild(b);
+      }
+      const typeBtn = h('button', { class: 'ltype-btn', title: 'Line style', 'aria-haspopup': 'menu' });
+      const showType = () => { typeBtn.innerHTML = LINE_TYPE_ICONS[cur().type] + '<span class="caret"></span>'; };
+      typeBtn.addEventListener('click', (e) => { e.preventDefault(); openLineTypeMenu(typeBtn, () => cur(), (k, v) => { set(k, v); showType(); }); });
+      showType();
+      kids.push(widths, typeBtn);
+      styleBox.appendChild(h('div', { class: 'style-row' }, h('span', {}, pl.name), h('span', { class: 'style-ctl' }, kids)));
+    };
     for (const pl of def.plots) {
       if (pl.palette) pl.palette.forEach((c, k) => colorRow(`${pl.name} ${def.id === 'vol' ? (k ? 'down' : 'up') : '#' + (k + 1)}`, `${pl.key}.${k}`, c));
+      else if ((pl.style || 'line') === 'line') lineRow(pl);
       else if (!pl.dynamic) colorRow(pl.style === 'mark' ? `${pl.name} marker` : pl.name, pl.key, pl.color);
     }
     for (const f of def.fills || []) {
@@ -1655,6 +1723,7 @@
       h('button', { class: 'btn ghost', onclick: () => {
         Object.assign(params, IND.defaults(def));
         for (const k of Object.keys(colors)) delete colors[k];
+        for (const k of Object.keys(styles)) delete styles[k];
         apply();
         slot.setIndicatorTf(id, null);
         openIndicatorSettings(slot, id);
@@ -1666,7 +1735,7 @@
     ];
     const m = openModal(def.name, body, {
       footer,
-      onClose: () => { if (!committed) { chart.updateIndicator(id, orig.params, orig.colors); if ((ind.tf || null) !== tfOrig) slot.setIndicatorTf(id, tfOrig); } },
+      onClose: () => { if (!committed) { chart.updateIndicator(id, orig.params, orig.colors, orig.styles); if ((ind.tf || null) !== tfOrig) slot.setIndicatorTf(id, tfOrig); } },
     });
   }
 
@@ -1805,9 +1874,9 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       let changed = false;
       for (const ind of [...c.indicators]) {
         if (ind.def.id !== defId || (ind.pane === c.main) === !!def.overlay) continue;
-        const keep = { params: ind.params, colors: ind.colors, visible: ind.visible };
+        const keep = { params: ind.params, colors: ind.colors, visible: ind.visible, styles: ind.styles, tf: ind.tf };
         c.removeIndicator(ind.id);
-        c.addIndicator(def, keep.params, { colors: keep.colors, visible: keep.visible });
+        c.addIndicator(def, keep.params, { colors: keep.colors, visible: keep.visible, styles: keep.styles, tf: keep.tf });
         changed = true;
       }
       if (c.replaceDef(defId, def) || changed) s.persistIndicators();
@@ -2435,6 +2504,49 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     notify(msg);
   }
 
+  // ---- "a new version is available": compare with the latest release on GitHub
+  // Only where the version is known: the Windows app, or the page served by node server.js.
+  const RELEASES = 'https://github.com/EigenLayerovich/candela/releases/latest';
+  const RELEASES_API = 'https://api.github.com/repos/EigenLayerovich/candela/releases/latest';
+  const verNum = (v) => String(v || '').replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
+  const newer = (a, b) => { const x = verNum(a), y = verNum(b); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+  let updateShown = null;
+  async function checkForUpdate() {
+    const desktop = window.candelaDesktop && window.candelaDesktop.version;
+    const mine = desktop || srv.appVersion;
+    if (!mine || PREVIEW) return;
+    let rel;
+    try {
+      const r = await fetch(RELEASES_API, { headers: { accept: 'application/vnd.github+json' } });
+      if (!r.ok) return;
+      rel = await r.json();
+    } catch (e) { return; } // offline: try again later
+    const latest = String(rel.tag_name || '').replace(/^v/, '');
+    if (!latest || !newer(latest, mine) || lsGet('candela.skipVersion') === latest || updateShown === latest) return;
+    updateShown = latest;
+    showUpdateNotice(latest, mine, rel, !!desktop);
+  }
+  function showUpdateNotice(latest, mine, rel, desktop) {
+    document.querySelector('.update-note')?.remove();
+    const close = () => note.remove();
+    // what changed since your version: the release notes' "## New in x.y.z" / "## In x.y.z" sections, as plain text
+    const notes = String(rel.body || '').split(/\n(?=## )/).map((sec) => sec.trim())
+      .filter((sec) => { const m = /^## (?:New in|In) v?([\d.]+)/i.exec(sec); return m && newer(m[1], mine); })
+      .map((sec) => sec.replace(/^## (?:New in|In) v?([\d.]+)/i, '$1:')).join('\n').replace(/\*/g, '').trim();
+    const note = h('div', { class: 'update-note', role: 'status' },
+      h('div', { class: 'update-head' }, h('b', {}, `Candela ${latest} is available`), h('span', { class: 'muted' }, ` (you have ${mine})`),
+        h('button', { class: 'icon-btn', title: 'Later', onclick: close }, '✕')),
+      notes ? h('div', { class: 'update-notes' }, notes) : null,
+      h('p', { class: 'muted' }, desktop
+        ? 'Download it, quit Candela from the tray icon, and run the new file. Your charts and alerts are kept.'
+        : 'To update, get the new files (git pull, or download them again) and restart node server.js.'),
+      h('div', { class: 'update-btns' },
+        h('button', { class: 'btn ghost', onclick: () => { lsSet('candela.skipVersion', latest); close(); } }, 'Skip this version'),
+        h('button', { class: 'btn ghost', onclick: close }, 'Later'),
+        h('button', { class: 'btn primary', onclick: () => { window.open(rel.html_url || RELEASES, '_blank', 'noopener'); } }, desktop ? 'Download' : 'Open release')));
+    document.body.appendChild(note);
+  }
+
   // ---- alert server (server.js): runs alerts with the browser closed
   // When the app is opened from the Candela server, alerts on live symbols are handed to it and this
   // tab stops checking them itself (no double alerts). If the server goes away, this tab takes over
@@ -2466,6 +2578,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (!j || j.app !== 'candela-alert-server') return renderServerStatus(); // served by a plain web server
     srv.available = true;
     srv.needsToken = false;
+    if (j.appVersion) { srv.appVersion = j.appVersion; checkForUpdate(); }
     MD.setProxy('/api/proxy', srv.token);
     openServerEvents();
   }
@@ -2930,6 +3043,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   startTickers();
   syncMarkerFeeds();
   probeServer();
+  setTimeout(checkForUpdate, 4000);
+  setInterval(checkForUpdate, 6 * 3600e3);
   if (!PREVIEW) MD.loadBStocks().then(() => {
     for (const sl of slots) if (MD.isBStock(sl.symbol)) { sl.chart.title = sl.title(); sl.chart._legendIdx = -2; sl.chart._updateLegendValues(); }
     renderWatchlist(); updateHeader(); refreshAlerts();

@@ -58,6 +58,10 @@
     t = clamp(t, 0, 1);
     return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
   }
+  // line thickness grades 1-4 (grade 1 is the default thin line) and line types
+  const LINE_WIDTHS = { 1: 1.25, 2: 2, 3: 3, 4: 4 };
+  const LINE_TYPES = ['line', 'linebr', 'step', 'stepbr', 'stepdia'];
+
   // Indicator values computed on another timeframe's candles, placed on the chart's bars: each chart bar
   // shows the value of the latest of those candles that started before the chart bar ended. So a daily SMA
   // on a 4H chart steps once a day, and on a weekly chart each week shows the SMA as of its last day.
@@ -307,6 +311,7 @@
         params: { ...window.Indicators.defaults(def), ...params },
         colors: { ...(opts.colors || {}) }, visible: opts.visible !== false, out: {},
         tf: opts.tf || null, // compute on another timeframe's candles (e.g. a daily SMA on a 4H chart)
+        styles: { ...(opts.styles || {}) }, // per line: { width: 1-4, type: 'line'|'linebr'|'step'|'stepbr'|'stepdia', priceLine }
       };
       if (def.overlay) ind.pane = this.main;
       else {
@@ -331,11 +336,12 @@
       this.invalidate();
     }
 
-    updateIndicator(id, params, colors) {
+    updateIndicator(id, params, colors, styles) {
       const ind = this.indicators.find((i) => i.id === id);
       if (!ind) return;
       if (params) ind.params = { ...ind.params, ...params };
       if (colors) ind.colors = { ...colors };
+      if (styles) ind.styles = JSON.parse(JSON.stringify(styles));
       this._calc(ind);
       this._buildLegends();
       this.invalidate();
@@ -435,6 +441,12 @@
     }
 
     plotColor(ind, pl) { return ind.colors[pl.key] || pl.color || (pl.palette && pl.palette[0]) || '#888'; }
+
+    // thickness (grades 1-4), line type and price line of one line of an indicator
+    plotStyle(ind, pl) {
+      const st = (ind.styles && ind.styles[pl.key]) || {};
+      return { width: LINE_WIDTHS[st.width] || pl.width || 1.25, grade: st.width || null, type: LINE_TYPES.includes(st.type) ? st.type : 'line', priceLine: !!st.priceLine };
+    }
 
     // ------------------------------------------------------------------ comparison overlays
     addCompare(c) {
@@ -1033,31 +1045,54 @@
             ctx.fill();
           }
         } else {
-          ctx.lineWidth = pl.width || 1.25;
-          ctx.lineJoin = 'round';
-          ctx.lineCap = 'round';
-          if (!cols) {
-            ctx.strokeStyle = color;
-            ctx.beginPath();
-            let pen = false;
+          // lines: Line (joins over missing values), Line with breaks, Step line, Step line with breaks,
+          // Step line with diamonds (a diamond wherever the value changes)
+          const st = this.plotStyle(ind, pl);
+          const step = st.type.startsWith('step'), breaks = st.type === 'linebr' || st.type === 'stepbr';
+          ctx.lineWidth = st.width;
+          ctx.lineJoin = step ? 'miter' : 'round';
+          ctx.lineCap = step ? 'square' : 'round';
+          let prev = -1, cur = null, open = false;
+          const flush = () => { if (open) { ctx.stroke(); open = false; } };
+          for (let i = lo; i <= hi; i++) {
+            const v = arr[i];
+            if (!isFinite(v)) { if (breaks) prev = -1; continue; }
+            const x = this.xAt(i), y = yfn(v), c = cols || idx ? colorAt(i) : color;
+            if (prev < 0) { flush(); ctx.strokeStyle = cur = c; ctx.beginPath(); ctx.moveTo(x, y); open = true; prev = i; continue; }
+            // each segment takes the color of the bar it ends on; same-color segments share a path
+            const py = yfn(arr[prev]);
+            if (c !== cur) { flush(); ctx.strokeStyle = cur = c; ctx.beginPath(); ctx.moveTo(this.xAt(prev), py); open = true; }
+            if (step) ctx.lineTo(x, py);
+            ctx.lineTo(x, y);
+            prev = i;
+          }
+          flush();
+          if (st.type === 'stepdia') {
+            const r = Math.max(2.5, st.width + 1.5);
             for (let i = lo; i <= hi; i++) {
               const v = arr[i];
-              if (!isFinite(v)) { pen = false; continue; }
+              if (!isFinite(v) || (i > 0 && arr[i - 1] === v)) continue;
               const x = this.xAt(i), y = yfn(v);
-              if (pen) ctx.lineTo(x, y); else { ctx.moveTo(x, y); pen = true; }
+              ctx.fillStyle = cols || idx ? colorAt(i) : color;
+              ctx.beginPath();
+              ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y);
+              ctx.closePath();
+              ctx.fill();
             }
-            ctx.stroke();
-          } else {
-            // each segment takes the color of the bar it ends on; consecutive same-color segments share a path
-            let cur = null;
-            for (let i = Math.max(lo, 1); i <= hi; i++) {
-              const v0 = arr[i - 1], v1 = arr[i];
-              if (!isFinite(v0) || !isFinite(v1)) continue;
-              const c = colorAt(i);
-              if (c !== cur) { if (cur) ctx.stroke(); ctx.strokeStyle = c; ctx.beginPath(); ctx.moveTo(this.xAt(i - 1), yfn(v0)); cur = c; }
-              ctx.lineTo(this.xAt(i), yfn(v1));
+          }
+          // price line: a dotted line across the pane at the latest value
+          if (st.priceLine) {
+            let k = arr.length - 1;
+            while (k >= 0 && !isFinite(arr[k])) k--;
+            if (k >= 0) {
+              const y = Math.round(yfn(arr[k])) + 0.5;
+              ctx.save();
+              ctx.lineWidth = 1;
+              ctx.setLineDash([1, 3]);
+              ctx.strokeStyle = color;
+              ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(this.plotW, y); ctx.stroke();
+              ctx.restore();
             }
-            if (cur) ctx.stroke();
           }
           ctx.lineWidth = 1;
           ctx.lineCap = 'butt';

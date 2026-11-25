@@ -1,4 +1,9 @@
-## New in 1.6.0
+## New in 1.7.0
+
+- **Line style for indicator lines**: thickness 1–4, Line / Line with breaks / Step line / Step line with breaks / Step line with diamonds, and a Price line option (indicator settings → Style).
+- **New version notice**: Candela tells you when a newer release is out, with what's new and a Download button.
+
+## In 1.6.0
 
 - **Perpetual futures from Binance and Bybit**: charts (every timeframe, custom ones too), indicators, watchlist, comparisons and alerts. Under the chart title: funding rate and next funding time, mark and index price, open interest. The *Across exchanges* panel shows the perpetuals next to spot. Both exchanges block some countries, including the US.
 

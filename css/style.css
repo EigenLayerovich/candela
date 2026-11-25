@@ -480,3 +480,38 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 /* ---- futures info under the chart title */
 .lg-info { font-size: 11px; color: var(--muted); margin: -1px 0 3px; white-space: pre; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .lg-info:empty { display: none; }
+
+/* ---- line style (indicator settings → Style) */
+.style-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.style-row > span:first-child { color: var(--muted); }
+.style-ctl { display: inline-flex; align-items: center; gap: 8px; }
+.style-ctl input[type="color"] { width: 44px; height: 30px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 2px; cursor: pointer; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; height: 30px; }
+.seg-btn { width: 30px; border: 0; border-right: 1px solid var(--border); background: var(--bg); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.seg-btn:last-child { border-right: 0; }
+.seg-btn:hover { background: var(--panel-2); }
+.seg-btn.on { background: var(--accent-soft); }
+.seg-line { display: block; width: 16px; background: var(--text); border-radius: 1px; font-style: normal; }
+.seg-btn.on .seg-line { background: var(--accent); }
+.ltype-btn { height: 30px; min-width: 52px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 6px; cursor: pointer; }
+.ltype-btn:hover { background: var(--panel-2); }
+.ltype-btn svg, .ltype-item svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.ltype-btn .caret { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid var(--muted); }
+.ltype-menu { position: fixed; z-index: 1000; width: 232px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); padding: 6px 0; }
+.ltype-toggle, .ltype-item { width: 100%; border: 0; background: transparent; color: var(--text); display: flex; align-items: center; gap: 10px; padding: 8px 14px; font: inherit; cursor: pointer; text-align: left; }
+.ltype-toggle { justify-content: space-between; }
+.ltype-toggle:hover, .ltype-item:hover { background: var(--panel-2); }
+.ltype-item.on { background: var(--accent-soft); color: var(--accent); }
+.ltype-sep { height: 1px; background: var(--border); margin: 6px 0; }
+.switch { width: 32px; height: 18px; border-radius: 9px; background: var(--border); position: relative; flex: none; transition: background 0.15s; }
+.switch::after { content: ""; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform 0.15s; }
+.ltype-toggle.on .switch { background: var(--accent); }
+.ltype-toggle.on .switch::after { transform: translateX(14px); }
+
+/* ---- new version notice */
+.update-note { position: fixed; left: 16px; bottom: 16px; z-index: 80; width: min(380px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; box-shadow: var(--shadow); padding: 12px 14px; animation: toastIn 0.2s ease-out; }
+.update-head { display: flex; align-items: baseline; gap: 2px; }
+.update-head .icon-btn { margin-left: auto; }
+.update-notes { white-space: pre-line; font-size: 12px; margin: 8px 0 0; max-height: 160px; overflow: auto; line-height: 1.45; }
+.update-note p { font-size: 12px; margin: 8px 0 10px; }
+.update-btns { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }

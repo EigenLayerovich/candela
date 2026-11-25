@@ -61,6 +61,7 @@ async function boot() {
   // fired alerts → Windows notifications (the server runs even when the window is hidden)
   server.events.on('fired', (ev) => notify(ev.message));
   ipcMain.on('candela:notify', (_e, msg) => notify(String(msg || '').slice(0, 500))); // alerts that run in the page itself
+  ipcMain.on('candela:version', (e) => { e.returnValue = app.getVersion(); }); // for the "new version available" notice
 
   createTray();
   const hidden = process.argv.includes('--hidden'); // started with Windows: stay in the tray

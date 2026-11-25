@@ -476,3 +476,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .tf-pick { display: inline-flex; gap: 6px; align-items: center; }
 .form input.tf-custom { width: 90px; height: 32px; border: 1px solid var(--border); background: var(--bg); border-radius: 6px; padding: 0 8px; color: var(--text); }
 .form input.tf-custom.bad { border-color: var(--down); }
+
+/* ---- futures info under the chart title */
+.lg-info { font-size: 11px; color: var(--muted); margin: -1px 0 3px; white-space: pre; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.lg-info:empty { display: none; }

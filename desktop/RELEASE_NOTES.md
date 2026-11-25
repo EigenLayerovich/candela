@@ -1,4 +1,8 @@
-## New in 1.5.0
+## New in 1.6.0
+
+- **Perpetual futures from Binance and Bybit**: charts (every timeframe, custom ones too), indicators, watchlist, comparisons and alerts. Under the chart title: funding rate and next funding time, mark and index price, open interest. The *Across exchanges* panel shows the perpetuals next to spot. Both exchanges block some countries, including the US.
+
+## In 1.5.0
 
 - **Indicators on another timeframe**: every built-in indicator (SMA, EMA, WMA, Bollinger Bands, RSI, MACD…) has a *Timeframe* setting. Set an SMA 200 to 1D and it shows the 200-day average on any chart: 4H, weekly, monthly.
 - **Custom timeframes**: 2D, 3H, 12H, 2W, 45m, 1M, 3M… from the ⋯ timeframe menu → *Custom…*, or type a number on the chart. They work on every exchange, live.

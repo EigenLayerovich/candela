@@ -130,7 +130,7 @@ closes (or every 15 seconds for "as soon as it appears"). The server uses the ap
 script code, so alerts behave exactly as they do in the browser. Crypto data comes from the exchanges'
 public APIs; no key needed.
 
-## Crypto exchanges: Binance, Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex
+## Crypto exchanges: Binance, Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex (+ futures)
 
 Binance is the default. Charts, watchlist, comparisons and alerts also work with **Bybit, OKX, Bitget,
 KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex** spot markets: public data, no account or key.
@@ -160,6 +160,22 @@ Things to know:
   latest 2,000 (daily and weekly charts reach back about 330 days), so you can't scroll back further there.
 - Bitfinex calls Tether **UST** and USD Coin **UDC**; Candela shows them as USDT and USDC.
 - Coinbase's candle history can lag a minute behind; the live feed fills in the current candle.
+
+
+### Perpetual futures: Binance and Bybit
+
+USDT- and USDC-margined perpetual futures from **Binance Futures** and **Bybit Futures** (Binance's list
+includes its stock and commodity "TradFi" perpetuals). Pick the *Binance Futures* or *Bybit Futures*
+chip in the symbol search; they show as `BTC/USDT PERP`. Everything works on them as on spot: every
+timeframe (custom ones too), indicators, watchlist, comparisons, alerts.
+
+- Under the chart title: the **funding rate** and time to the next funding, **mark** and **index** price,
+  and **open interest** (in dollars), refreshed every 15 seconds.
+- The *Across exchanges* panel lists the perpetuals too ("Binance perp", "Bybit perp"), so you can see
+  the premium of the perpetual over spot at a glance.
+- Both exchanges block some countries, including the US. Where they're blocked, the search and the panel
+  say so.
+- If the live feed stops (some networks block it), Candela switches to refreshing every 4 seconds.
 
 ## Stocks, ETFs and forex
 
@@ -216,7 +232,8 @@ is meant for personal use.
 ## Features
 
 - **Live data**: every Binance spot pair (BTC, ETH, SOL, ~3,000 pairs), real-time via WebSocket,
-  with a bar-close countdown; plus Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex (see above). **Stocks and ETFs** as Binance bStocks (free, live, no key) or via
+  with a bar-close countdown; plus Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex, and Binance and
+  Bybit perpetual futures with funding rate and open interest (see above). **Stocks and ETFs** as Binance bStocks (free, live, no key) or via
   Twelve Data with forex too (free key); see above.
   Scroll or zoom left and older history loads automatically.
 - **Timeframes**: 1m 3m 5m 15m 30m 1H 2H 4H 6H 8H 12H 1D 3D 1W 1M, plus **your own** (2D, 3H, 2W, 45m,
@@ -370,7 +387,8 @@ It shows up in the Indicators dialog automatically, with a settings panel genera
 - `js/script.js`: Candela Script: lexer, parser, checker, interpreter, built-in functions
 - `js/alerts-core.js`: alert rules shared by the browser and the server
 - `js/data.js`: Binance REST/WebSocket, Twelve Data, demo feed, CSV parser
-- `js/exchanges.js`: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex, and building missing timeframes
+- `js/exchanges.js`: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex, Binance and
+  Bybit futures, and building missing timeframes
 - `server.js`: the alert server (also serves the app)
 - `desktop/`: the Windows app (Electron): `main.js` (window, tray, notifications), `preload.js`,
   `installer.nsi` (installer), icons

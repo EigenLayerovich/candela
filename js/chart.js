@@ -112,6 +112,7 @@
       this.rightOffset = 6;
       this.chartType = 'candles';
       this.title = '';
+      this.info = ''; // a line under the title (funding rate, open interest… on futures)
       this.live = false;
       this.panes = [this._pane('main', 3)];
       this.indicators = [];
@@ -421,6 +422,12 @@
       this.onLayoutChange();
     }
 
+    setInfo(text) {
+      this.info = text || '';
+      const el = this.main.legendEl && this.main.legendEl.querySelector('.lg-info');
+      if (el) el.textContent = this.info;
+    }
+
     indicatorLabel(ind) {
       const vals = ind.def.inputs.map((inp) => ind.params[inp.key]).filter((v) => v !== 'close');
       const tf = ind.tf ? ' · ' + ind.tf.replace(/h$/, 'H').replace(/d$/, 'D').replace(/w$/, 'W') : '';
@@ -506,6 +513,10 @@
           head.className = 'lg-head';
           head.innerHTML = '<span class="lg-title"></span><span class="lg-ohlc"></span>';
           el.appendChild(head);
+          const info = document.createElement('div');
+          info.className = 'lg-info';
+          info.textContent = this.info;
+          el.appendChild(info);
           for (const c of this.compares) {
             const row = document.createElement('div');
             row.className = 'lg-row cmp' + (c.visible ? '' : ' off');

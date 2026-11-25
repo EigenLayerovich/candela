@@ -25,6 +25,21 @@
   const exOf = (sym) => MD.exchangeOf(sym); // Bybit, KuCoin, Kraken or Coinbase (null for Binance and the rest)
   // bare name plus the exchange, for lists that mix exchanges: "BTC/USD · Kraken"
   const symLabel = (sym) => (exOf(sym) ? `${bare(sym)} · ${exOf(sym).name}` : bare(sym));
+  // "$5.75B", "$812.4M"
+  const money = (v) => (v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : `$${Math.round(v / 1e3)}K`);
+  function futuresInfo(t, chart) {
+    const parts = [];
+    if (isFinite(t.funding)) {
+      let f = `Funding ${t.funding >= 0 ? '+' : ''}${(t.funding * 100).toFixed(4)}%`;
+      const left = t.nextFunding - Date.now();
+      if (left > 0) f += ` · next in ${Math.floor(left / 3600e3)}h ${Math.floor((left % 3600e3) / 60e3)}m`;
+      parts.push(f);
+    }
+    if (isFinite(t.mark)) parts.push(`Mark ${chart.fmtPrice(t.mark)}`);
+    if (isFinite(t.index)) parts.push(`Index ${chart.fmtPrice(t.index)}`);
+    if (isFinite(t.oiValue) && t.oiValue > 0) parts.push(`Open interest ${money(t.oiValue)}`);
+    return parts.join('   ');
+  }
   const isDemo = (sym) => /^DEMO\d*$/.test(sym);
   const uid = () => Math.random().toString(36).slice(2, 10);
   const CMP_COLORS = ['#F5A623', '#E040FB', '#2EC4B6', '#FF7043', '#9C6ADE'];
@@ -225,6 +240,7 @@
       if (this.stop) this.stop();
       this.stopCompares();
       this.stopTfFeeds();
+      this.stopInfo();
       this.chart.destroy();
       this.el.remove();
     }
@@ -243,6 +259,27 @@
       }));
       save();
       if (this.status !== 'loading') this.syncTfFeeds();
+    }
+
+    // ---- perpetual futures: funding rate, mark price and open interest under the title, every 15 s
+    startInfo() {
+      this.stopInfo();
+      const ex = exOf(this.symbol);
+      if (!ex || !ex.futures || this.mode !== 'live') return;
+      const sym = this.symbol, c = this.chart;
+      const tick = async () => {
+        let t = null;
+        try { t = await MD.ticker(sym); } catch (e) { /* keep the last line */ }
+        if (this.symbol !== sym || !this.infoTimer) return;
+        if (t) c.setInfo(futuresInfo(t, c));
+        this.infoTimer = setTimeout(tick, 15000);
+      };
+      this.infoTimer = setTimeout(tick, 0);
+    }
+    stopInfo() {
+      clearTimeout(this.infoTimer);
+      this.infoTimer = null;
+      this.chart.setInfo('');
     }
 
     // ---- indicators set to another timeframe (a daily SMA on a 4H chart…): that timeframe's candles
@@ -340,6 +377,7 @@
       this.stopCompares();
       this.stopTfFeeds();
       c.clearTfSources();
+      this.stopInfo();
       this.cfg.symbol = sym;
       this.cfg.tf = tf;
       c.tfKey = tf;
@@ -427,6 +465,7 @@
       if (last) { lastPx[sym] = last.c; if (this === active) updateDocTitle(); }
       this.startCompares();
       this.syncTfFeeds();
+      this.startInfo();
       primeChartAlerts(this);
       if (MD.isBStock(sym) && !state.bstockNoteSeen) {
         state.bstockNoteSeen = true;
@@ -1290,8 +1329,9 @@
         if (src === 'ALL' && !q) continue; // "All" lists other exchanges once you type
         const l = exLists[ex.id];
         const rows = l ? MD.searchPairs(l, raw).filter((p) => !exclude(p.id)).slice(0, src === 'ALL' ? 4 : 60).map((p) => ({ id: p.id, kind: 'ex', ex })) : [];
-        if (rows.length) exGroups.push([`Crypto · ${ex.name}`, rows]);
-        else if (src === ex.id) exGroups.push([`Crypto · ${ex.name}`, [], exProblems[ex.id] === 'loading' || !l ? (exProblems[ex.id] && exProblems[ex.id] !== 'loading' ? exProblems[ex.id] : `Loading ${ex.name} symbols…`) : `Nothing found on ${ex.name} for "${raw}".`]);
+        const gname = ex.futures ? `Perpetual futures · ${ex.name.replace(/ Futures$/, '')}` : `Crypto · ${ex.name}`;
+        if (rows.length) exGroups.push([gname, rows]);
+        else if (src === ex.id) exGroups.push([gname, [], exProblems[ex.id] === 'loading' || !l ? (exProblems[ex.id] && exProblems[ex.id] !== 'loading' ? exProblems[ex.id] : `Loading ${ex.name} symbols…`) : `Nothing found on ${ex.name} for "${raw}".`]);
       }
       const binGroup = ['Crypto · Binance', cryptoRows];
       let groups;
@@ -1310,7 +1350,7 @@
           items.push(row);
           let detail;
           if (row.kind === 'crypto') detail = isDemo(row.id) ? 'Demo feed' : row.id.startsWith('CSV:') ? 'Imported CSV' : 'Crypto · Binance';
-          else if (row.kind === 'ex') detail = `Crypto · ${row.ex.name}`;
+          else if (row.kind === 'ex') detail = row.ex.futures ? `Perpetual future · ${row.ex.name}` : `Crypto · ${row.ex.name}`;
           else if (row.kind === 'bstock') {
             const t = MD.bStockTicker(row.id), named = stockHits.find((r) => r.us && r.symbol.replace(/[^A-Z0-9]/g, '') === t);
             detail = `${named ? named.name : 'Tokenized ' + t} · bStock · free, live`;

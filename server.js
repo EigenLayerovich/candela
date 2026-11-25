@@ -396,6 +396,7 @@ const publicSettings = () => ({
 const PROXY_ALLOW = [
   ['api.kucoin.com', /^\/api\/v[12]\/(market\/(candles|stats|allTickers|orderbook\/level1)|symbols)$/],
   ['api.bybit.com', /^\/v5\/market\/(kline|tickers|instruments-info)$/],
+  ['fapi.binance.com', /^\/fapi\/v1\/(klines|exchangeInfo|ticker\/24hr|premiumIndex|openInterest)$/],
   ['api.mexc.com', /^\/api\/v3\/(klines|ticker\/24hr|exchangeInfo)$/],
   ['api-pub.bitfinex.com', /^\/v2\/(candles\/trade:[0-9a-zA-Z]+:t[A-Z0-9:]+\/hist|ticker\/t[A-Z0-9:]+|conf\/pub:list:pair:exchange)$/],
 ];

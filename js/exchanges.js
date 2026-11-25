@@ -1,4 +1,5 @@
-/* Candela — more crypto exchanges: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex (Binance lives in data.js).
+/* Candela — more crypto exchanges: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase and Bitfinex,
+ * plus Binance and Bybit perpetual futures (Binance spot lives in data.js).
  *
  * Symbols are written EXCHANGE:BASE/QUOTE, e.g. "KRAKEN:BTC/USD", "KUCOIN:ETH/USDT". Every exchange gets
  * the same five operations: symbol list, candle history, live updates, a 24-hour ticker, and the candle
@@ -104,6 +105,20 @@
     return () => { stopped = true; clearTimeout(timer); };
   }
 
+  // A live WebSocket feed that switches to polling if no candle arrives for 30 seconds (the socket is
+  // blocked on this network, or the exchange moved it).
+  function liveOrPoll(ex, b, q, tf, onBar, onStatus, openSocket) {
+    let last = Date.now(), stopWs = null, stopPoll = null;
+    stopWs = openSocket((bar) => { last = Date.now(); onBar(bar); }, (st) => { if (!stopPoll && onStatus) onStatus(st); });
+    const watchdog = setInterval(() => {
+      if (Date.now() - last < 30000) return;
+      clearInterval(watchdog);
+      stopWs();
+      stopPoll = poller(ex, b, q, tf, onBar, onStatus, 4000);
+    }, 5000);
+    return () => { clearInterval(watchdog); stopWs(); if (stopPoll) stopPoll(); };
+  }
+
   const sortAsc = (bars) => bars.sort((a, b) => a.t - b.t);
   // fetch `limit` candles ending at `endTime`, `per` at a time, walking backwards
   async function pages({ limit = 1000, endTime } = {}, per, fetchPage) {
@@ -122,34 +137,110 @@
   }
 
   // ---------------------------------------------------------------- Bybit
-  const BYBIT = {
-    id: 'BYBIT', name: 'Bybit', tag: 'BY', cors: 'unknown', rest: 'https://api.bybit.com',
-    tfs: { '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30', '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720', '1d': 'D', '1w': 'W' },
+  // spot and USDT/USDC perpetual futures ("linear") share one API
+  function bybit(category) {
+    const futures = category === 'linear';
+    return {
+      id: futures ? 'BYBITF' : 'BYBIT', name: futures ? 'Bybit Futures' : 'Bybit', short: futures ? 'Bybit perp' : 'Bybit',
+      tag: futures ? 'BYF' : 'BY', futures, cors: 'unknown', rest: 'https://api.bybit.com',
+      tfs: { '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30', '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720', '1d': 'D', '1w': 'W', '1M': 'M' },
+      symOf: null, // "BTC/USDC" -> "BTCPERP": not every futures symbol is base + quote
+      async pairs() {
+        const out = [], symOf = {};
+        let cursor = '';
+        for (let k = 0; k < 5; k++) {
+          const j = await get(this, `${this.rest}/v5/market/instruments-info?category=${category}&limit=1000${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`);
+          if (j.retCode !== 0) throw err(`${this.name}: ${j.retMsg}`);
+          for (const x of j.result.list || []) {
+            if (x.status !== 'Trading' || (futures && x.contractType !== 'LinearPerpetual')) continue;
+            out.push([x.baseCoin, x.quoteCoin]);
+            symOf[`${x.baseCoin}/${x.quoteCoin}`.toUpperCase()] = x.symbol;
+          }
+          cursor = j.result.nextPageCursor;
+          if (!cursor) break;
+        }
+        this.symOf = symOf;
+        return out;
+      },
+      async symbol(b, q) {
+        if (!futures || q === 'USDT') return b + q;
+        if (!this.symOf) { try { await pairs(this.id); } catch (e) { /* guess */ } }
+        return (this.symOf && this.symOf[`${b}/${q}`]) || b + q;
+      },
+      history(b, q, tf, opts) {
+        return pages(opts, 1000, async (n, end) => {
+          let url = `${this.rest}/v5/market/kline?category=${category}&symbol=${await this.symbol(b, q)}&interval=${this.tfs[tf]}&limit=${n}`;
+          if (end) url += `&end=${Math.floor(end)}`;
+          const j = await get(this, url);
+          if (j.retCode !== 0) throw err(`${this.name}: ${j.retMsg}`, { fatal: /symbol|not ?support|invalid/i.test(j.retMsg || '') });
+          // [start(ms), open, high, low, close, volume, turnover], newest first
+          return (j.result.list || []).map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+        });
+      },
+      stream(b, q, tf, onBar, onStatus) {
+        const open = (bar, status) => {
+          let stop = null, stopped = false;
+          this.symbol(b, q).then((name) => {
+            if (stopped) return;
+            const topic = `kline.${this.tfs[tf]}.${name}`;
+            stop = socket(`wss://stream.bybit.com/v5/public/${category}`, {
+              onOpen: (send) => send({ op: 'subscribe', args: [topic] }),
+              onMessage: (m) => { if (m.topic === topic) for (const d of m.data || []) bar({ t: +d.start, o: +d.open, h: +d.high, l: +d.low, c: +d.close, v: +d.volume }); },
+              onStatus: status, ping: { every: 20000, msg: { op: 'ping' } },
+            });
+          });
+          return () => { stopped = true; if (stop) stop(); };
+        };
+        return futures ? liveOrPoll(this, b, q, tf, onBar, onStatus, open) : open(onBar, onStatus);
+      },
+      async ticker(b, q) {
+        const r = (await get(this, `${this.rest}/v5/market/tickers?category=${category}&symbol=${await this.symbol(b, q)}`)).result.list[0];
+        const t = { c: +r.lastPrice, o: +r.prevPrice24h, vq: +r.turnover24h };
+        if (futures) Object.assign(t, { funding: +r.fundingRate, nextFunding: +r.nextFundingTime, mark: +r.markPrice, index: +r.indexPrice, oiValue: +r.openInterestValue });
+        return t;
+      },
+    };
+  }
+  const BYBIT = bybit('spot');
+  const BYBITF = bybit('linear');
+
+  // ---------------------------------------------------------------- Binance USDⓈ-M perpetual futures
+  // (Binance spot lives in data.js.) Same candle format as spot.
+  const BINANCEF = {
+    id: 'BINANCEF', name: 'Binance Futures', short: 'Binance perp', tag: 'BNF', futures: true, cors: 'unknown', rest: 'https://fapi.binance.com',
+    tfs: Object.fromEntries(['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'].map((x) => [x, x])),
     async pairs() {
-      const j = await get(this, `${this.rest}/v5/market/instruments-info?category=spot`);
-      return (j.result.list || []).filter((s) => s.status === 'Trading').map((s) => [s.baseCoin, s.quoteCoin]);
+      const j = await get(this, `${this.rest}/fapi/v1/exchangeInfo`);
+      // perpetuals only (crypto, and the stock / commodity "TradFi" perpetuals)
+      return (j.symbols || []).filter((x) => x.status === 'TRADING' && /PERPETUAL$/.test(x.contractType) && x.symbol === x.baseAsset + x.quoteAsset)
+        .map((x) => [x.baseAsset, x.quoteAsset]);
     },
     history(b, q, tf, opts) {
-      return pages(opts, 1000, async (n, end) => {
-        let url = `${this.rest}/v5/market/kline?category=spot&symbol=${b}${q}&interval=${this.tfs[tf]}&limit=${n}`;
-        if (end) url += `&end=${Math.floor(end)}`;
-        const j = await get(this, url);
-        if (j.retCode !== 0) throw err(`Bybit: ${j.retMsg}`, { fatal: /symbol|not ?support|invalid/i.test(j.retMsg || '') });
-        // [start(ms), open, high, low, close, volume, turnover], newest first
-        return (j.result.list || []).map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+      return pages(opts, 1500, async (n, end) => {
+        let url = `${this.rest}/fapi/v1/klines?symbol=${b}${q}&interval=${tf}&limit=${n}`;
+        if (end) url += `&endTime=${Math.floor(end)}`;
+        const rows = await get(this, url);
+        if (!Array.isArray(rows)) throw err(`Binance Futures: ${rows.msg || 'unexpected reply'}`, { fatal: true });
+        return rows.map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
       });
     },
     stream(b, q, tf, onBar, onStatus) {
-      const topic = `kline.${this.tfs[tf]}.${b}${q}`;
-      return socket('wss://stream.bybit.com/v5/public/spot', {
-        onOpen: (send) => send({ op: 'subscribe', args: [topic] }),
-        onMessage: (m) => { if (m.topic === topic) for (const d of m.data || []) onBar({ t: +d.start, o: +d.open, h: +d.high, l: +d.low, c: +d.close, v: +d.volume }); },
-        onStatus, ping: { every: 20000, msg: { op: 'ping' } },
-      });
+      return liveOrPoll(this, b, q, tf, onBar, onStatus, (bar, status) => socket(`wss://fstream.binance.com/market/ws/${(b + q).toLowerCase()}@kline_${tf}`, { // market streams moved under /market
+        onOpen: () => {},
+        onMessage: (m) => { const k = m.k; if (k) bar({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v }); },
+        onStatus: status,
+      }));
     },
     async ticker(b, q) {
-      const r = (await get(this, `${this.rest}/v5/market/tickers?category=spot&symbol=${b}${q}`)).result.list[0];
-      return { c: +r.lastPrice, o: +r.prevPrice24h, vq: +r.turnover24h };
+      const [t, p, oi] = await Promise.all([
+        get(this, `${this.rest}/fapi/v1/ticker/24hr?symbol=${b}${q}`),
+        get(this, `${this.rest}/fapi/v1/premiumIndex?symbol=${b}${q}`).catch(() => null),
+        get(this, `${this.rest}/fapi/v1/openInterest?symbol=${b}${q}`).catch(() => null),
+      ]);
+      const out = { c: +t.lastPrice, o: +t.openPrice, vq: +t.quoteVolume };
+      if (p) Object.assign(out, { funding: +p.lastFundingRate, nextFunding: +p.nextFundingTime, mark: +p.markPrice, index: +p.indexPrice });
+      if (p && oi) out.oiValue = +oi.openInterest * +p.markPrice;
+      return out;
     },
   };
 
@@ -491,8 +582,8 @@
     },
   };
 
-  const EXCHANGES = { BYBIT, OKX, BITGET, KUCOIN, GATE, MEXC, HTX, KRAKEN, COINBASE, BITFINEX };
-  const ID_RE = /^(BYBIT|OKX|BITGET|KUCOIN|GATE|MEXC|HTX|KRAKEN|COINBASE|BITFINEX):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
+  const EXCHANGES = { BYBIT, OKX, BITGET, KUCOIN, GATE, MEXC, HTX, KRAKEN, COINBASE, BITFINEX, BINANCEF, BYBITF };
+  const ID_RE = /^(BYBIT|OKX|BITGET|KUCOIN|GATE|MEXC|HTX|KRAKEN|COINBASE|BITFINEX|BINANCEF|BYBITF):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
   function parse(sym) {
     const m = ID_RE.exec(sym || '');
     return m ? { ex: EXCHANGES[m[1]], b: m[2], q: m[3] } : null;
@@ -511,7 +602,7 @@
           const B = String(b).toUpperCase(), Q = String(q).toUpperCase(), id = `${exId}:${B}/${Q}`;
           if (!/^[A-Z0-9.]+$/.test(B) || !/^[A-Z0-9.]+$/.test(Q) || seen.has(id)) continue;
           seen.add(id);
-          out.push({ id, base: B, quote: Q, key: B + Q });
+          out.push({ id, base: B, quote: Q, key: B + Q, alt: B.replace(/^\d+/, '') }); // alt: PEPE for futures' 1000PEPE
         }
         return out;
       }).catch((e) => {
@@ -529,7 +620,7 @@
     const order = ex && ex.quotes ? [...ex.quotes, 'BTC', 'ETH'] : QUOTE_RANK;
     const qrank = (x) => { const i = order.indexOf(x); return i < 0 ? 99 : i; };
     const q = String(query || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const hits = q ? list.filter((p) => p.key.startsWith(q) || p.base === q) : list.filter((p) => qrank(p.quote) < 3);
+    const hits = q ? list.filter((p) => p.key.startsWith(q) || p.base === q || (p.alt !== p.base && p.alt.startsWith(q))) : list.filter((p) => qrank(p.quote) < 3);
     return hits.sort((a, b) => (b.base === q) - (a.base === q) || qrank(a.quote) - qrank(b.quote) || a.key.length - b.key.length || a.key.localeCompare(b.key));
   }
 
@@ -565,7 +656,7 @@
       let list = null, problem = null;
       try { list = await pairs(exId); } catch (e) { problem = e; }
       const p = list && prefs.map((q) => list.find((x) => x.base === base && x.quote === q)).find(Boolean);
-      out.push({ ex: exId, name: EXCHANGES[exId].name, id: p ? p.id : null, quote: p ? p.quote : null, problem });
+      out.push({ ex: exId, name: EXCHANGES[exId].short || EXCHANGES[exId].name, id: p ? p.id : null, quote: p ? p.quote : null, problem });
     }));
     const order = ['BINANCE', ...Object.keys(EXCHANGES)];
     return out.sort((a, b) => order.indexOf(a.ex) - order.indexOf(b.ex));
@@ -576,11 +667,12 @@
   }
 
   const exchangeOf = (sym) => { const s = parse(sym); return s ? s.ex : null; };
-  const exDisplay = (sym) => { const s = parse(sym); return s ? `${s.b}/${s.q}` : null; };
+  // "BTC/USD"; perpetual futures: "BTC/USDT PERP"
+  const exDisplay = (sym) => { const s = parse(sym); return s ? `${s.b}/${s.q}${s.ex.futures ? ' PERP' : ''}` : null; };
   // name for messages and lists: "BTC/USD (Kraken)", "NVDAB", "AAPL", "BTCUSDT"
   function displayName(sym) {
     const s = parse(sym);
-    if (s) return `${s.b}/${s.q} (${s.ex.name})`;
+    if (s) return `${exDisplay(sym)} (${s.ex.name})`;
     if (MD.isBStock && MD.isBStock(sym)) return sym.replace(/USDT$/, '');
     return sym.replace(/^(CSV|TD):/, '').replace(/@.*$/, '');
   }

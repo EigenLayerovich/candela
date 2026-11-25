@@ -326,7 +326,13 @@ with the live price until the day closes, as on other charting apps. It works fo
 - **Bottom bar**: date ranges **1D 5D 1M 3M 6M YTD 1Y 5Y All** (each picks a fitting timeframe and loads
   the history it needs), **Go to date** (calendar button), the current time and the **time zone** of the time
   axis (your computer, UTC, or a market city).
-- **Chart settings** (gear at the top): up/down candle colors, background, grid lines, symbol watermark,
+- **Measure**: `Shift` + click on the chart (or the ruler in the left toolbar), move, click again: price change, %,
+  candles and time. Nothing is saved; the next click or `Esc` removes it.
+- **Alerts on the chart**: drag a price alert's dashed line to move it; right-click it (or the alert in the
+  Alerts list) to edit or remove it.
+- **Indicator colors with opacity**: every color in an indicator's *Style* tab has an opacity slider, from
+  0% (invisible) to 100% (solid).
+- **Chart settings** (gear at the top): (also in the chart's right-click menu) up/down candle colors, background, grid lines, symbol watermark,
   last price line, candle countdown, time zone. They apply to every chart; *Defaults* resets them.
 - **Saved layouts** (layout menu → *Save this layout as…*): keep named sets of charts (symbols, timeframes,
   indicators, chart types and arrangement) and switch between them.
@@ -448,6 +454,9 @@ new version over the old one (quit Candela from the tray first); your charts and
 | Finish a path / polyline | double-click or `Enter` |
 | Bar Replay: next candle | `Shift+→` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` (or `Ctrl+Shift+Z`) |
+| Measure | `Shift` + click on the chart (or the ruler in the left toolbar), then click again; the next click removes it |
+| Move a price alert | drag its dashed line up or down |
+| Edit or remove an alert | right-click its line on the chart, or the alert in the Alerts list |
 | Alert | `Alt+A`, or right-click the chart → *Add alert at …* |
 | Delete drawing | select it, then `Del` |
 | Focus chart N in a layout | `Alt+1` … `Alt+6` |

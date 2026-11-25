@@ -218,6 +218,7 @@
       c.onLayoutChange = () => this.persistIndicators();
       c.onDrawingsChange = () => drawingsChanged(this);
       c.onToolDone = () => setActiveTool('cursor');
+      c.onAlertMove = (a) => alertMoved(a);
       c.onSelect = (d) => this.showDrawBar(d);
       c.onNeedHistory = () => this.loadOlder();
       c.onContextMenu = (info) => showContextMenu(this, info);
@@ -1478,6 +1479,9 @@
     }
     const txt = h('button', { class: 'tool', 'data-tool': 'text', title: 'Text', onclick: () => setActiveTool('text') });
     txt.innerHTML = toolSvg('text');
+    const ruler = h('button', { class: 'tool', 'data-tool': 'ruler', title: 'Measure (or Shift + click on the chart)', onclick: () => setActiveTool(active && active.chart.tool === 'ruler' ? 'cursor' : 'ruler') });
+    ruler.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2M16 4l1 1" /></svg>';
+    tb.append(ruler);
     const fav = h('button', { class: 'tool', id: 'favBtn', title: 'Favorite tools (star them in the menus)', onclick: () => openToolMenu(null, fav) });
     fav.innerHTML = `<svg viewBox="0 0 24 24">${HEART}</svg>`;
     tb.append(txt, fav);
@@ -2055,11 +2059,19 @@
     if (!def.inputs.length) inputsBox.appendChild(h('p', { class: 'muted' }, 'This indicator has no inputs.'));
 
     const styleBox = h('div', { class: 'form' });
+    // a color with an opacity slider (0% invisible … 100% solid)
+    const colorCtl = (key, fallback) => {
+      const cur = colors[key] || fallback;
+      const ci = h('input', { type: 'color', value: toHex(cur), title: 'Color' });
+      const op = h('input', { type: 'range', min: 0, max: 100, step: 1, value: Math.round(alphaOf(cur) * 100), class: 'op-slider', title: 'Opacity' });
+      const pct = h('span', { class: 'op-val' }, op.value + '%');
+      const upd = () => { colors[key] = applyAlpha(ci.value, +op.value / 100); pct.textContent = op.value + '%'; apply(); };
+      ci.addEventListener('input', upd);
+      op.addEventListener('input', upd);
+      return h('span', { class: 'color-ctl' }, ci, op, pct);
+    };
     const colorRow = (label, key, fallback) => {
-      const cur = colors[key] || fallback, a = alphaOf(cur);
-      const ctl = h('input', { type: 'color', value: toHex(cur) });
-      ctl.addEventListener('input', () => { colors[key] = applyAlpha(ctl.value, a); apply(); });
-      styleBox.appendChild(h('label', {}, h('span', {}, label), ctl));
+      styleBox.appendChild(h('label', {}, h('span', {}, label), colorCtl(key, fallback)));
     };
     // lines: color, thickness 1-4 and line type (Line, Step line…, with a price line option)
     const lineRow = (pl) => {
@@ -2067,12 +2079,7 @@
       const cur = () => chart.plotStyle({ styles, colors }, pl);
       const set = (k, v) => { st[k] = v; apply(); };
       const kids = [];
-      if (!pl.dynamic) {
-        const c0 = colors[pl.key] || pl.color, a = alphaOf(c0);
-        const ctl = h('input', { type: 'color', value: toHex(c0), title: 'Color' });
-        ctl.addEventListener('input', () => { colors[pl.key] = applyAlpha(ctl.value, a); apply(); });
-        kids.push(ctl);
-      }
+      if (!pl.dynamic) kids.push(colorCtl(pl.key, pl.color));
       const grade = cur().grade || (cur().width <= 1.5 ? 1 : Math.min(4, Math.round(cur().width)));
       const widths = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': 'Thickness' });
       for (const g of [1, 2, 3, 4]) {
@@ -2129,7 +2136,7 @@
       h('button', { class: 'btn primary', onclick: () => { committed = true; slot.persistIndicators(); closeModal(); } }, 'OK'),
     ];
     const m = openModal(def.name, body, {
-      footer,
+      footer, wide: true,
       onClose: () => { if (!committed) { chart.updateIndicator(id, orig.params, orig.colors, orig.styles); if ((ind.tf || null) !== tfOrig) slot.setIndicatorTf(id, tfOrig); } },
     });
   }
@@ -2797,7 +2804,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
           : 'Fires once when the price crosses this level.';
       const where = !a.active ? '' : a.server && srv.connected ? '\nRuns on the alert server, even with the browser closed.'
         : srv.connected ? '\nRuns only while this tab is open (simulated and CSV data stay in the browser).' : '\nRuns while this page is open.';
-      const row = h('div', { class: 'al-row' + (a.active && !a.paused ? '' : ' done') + (AL.isBar(a) ? ' marker' : ''), title: tip + where, onclick: () => showAlertOnChart(a) },
+      const row = h('div', { class: 'al-row' + (a.active && !a.paused ? '' : ' done') + (AL.isBar(a) ? ' marker' : ''), title: tip + where + '\nRight-click to edit or remove.', onclick: () => showAlertOnChart(a),
+        oncontextmenu: (e) => { e.preventDefault(); showAlertMenu(a, e.clientX, e.clientY); } },
         h('span', { class: 'al-dot' }),
         h('span', { class: 'al-text' }, h('b', {}, symLabel(a.symbol)),
           alertText(a),
@@ -2816,6 +2824,88 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (match) { setActive(match); return; }
     if (AL.isBar(a)) active.load(a.symbol, a.tf);
     else if (!slots.some((s) => s.symbol === a.symbol)) active.load(a.symbol);
+  }
+
+  // right-click on an alert in the list
+  function showAlertMenu(a, x, y) {
+    const menu = $('#ctxMenu');
+    menu.innerHTML = '';
+    const item = (label, fn, cls = '') => menu.appendChild(h('button', { class: 'ctx-item ' + cls, onclick: () => { hideMenus(); fn(); } }, label));
+    menu.appendChild(h('div', { class: 'ctx-label' }, alertTitle(a)));
+    item('Edit alert…', () => editAlertDialog(a));
+    item('Show on the chart', () => showAlertOnChart(a));
+    item('Remove alert', () => deleteAlert(a), 'danger');
+    menu.classList.remove('hidden');
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.min(x, window.innerWidth - r.width - 8) + 'px';
+    menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + 'px';
+  }
+  // after an edit or a drag: save, and replace it on the alert server
+  async function resyncAlert(a) {
+    save();
+    refreshAlerts();
+    syncMarkerFeeds();
+    startTickers();
+    if (!a.server) return; // runs in this tab (it goes to the server when that connects)
+    if (srv.connected) {
+      try {
+        const saved = await srvApi('PUT', '/api/alerts/' + a.id, toServer(a));
+        const i = state.alerts.findIndex((x) => x.id === a.id);
+        if (i >= 0) state.alerts[i] = { ...saved, server: true };
+      } catch (e) { toast(`The alert server did not take the change (${e.message}).`, 'warn', 6000); }
+    } else {
+      state.serverDeletes.push(a.id); // replace it when the server is back
+      a.server = false;
+    }
+    save();
+    refreshAlerts();
+  }
+  // a price alert's line was dragged on the chart
+  function alertMoved(a) {
+    if (lastPx[a.symbol] != null) a.refPrice = lastPx[a.symbol];
+    toast(`Alert moved: ${alertTitle(a)}`, 'info', 1800);
+    resyncAlert(a);
+  }
+  function editAlertDialog(a) {
+    const form = h('div', { class: 'form' }, h('label', {}, h('span', {}, 'Alert'), h('b', {}, alertTitle(a))));
+    const sel = (options, value) => { const s = h('select', {}, options.map(([v, l]) => h('option', { value: v }, l))); s.value = value; return s; };
+    const row = (label, ctl) => { form.appendChild(h('label', {}, h('span', {}, label), ctl)); return ctl; };
+    let price, dir, op, value, when, repeat;
+    if (!a.kind || AL.isLine(a)) {
+      if (!a.kind) { price = row('Price', h('input', { type: 'number', step: 'any', value: a.price })); }
+      dir = row('Direction', sel([['', 'Crossing either way'], ['up', 'Crossing up'], ['down', 'Crossing down']], a.dir || ''));
+      if (AL.isLine(a)) repeat = row('Repeat', sel([['once', 'Only once'], ['every', 'Every time (at most once a minute)']], a.repeat || 'once'));
+    } else {
+      if (AL.isCond(a)) {
+        op = row('Condition', sel(Object.entries(AL.OPS).map(([k, l]) => [k, l[0].toUpperCase() + l.slice(1)]), a.op));
+        if (a.right.src === 'value') value = row('Value', h('input', { type: 'number', step: 'any', value: a.right.value }));
+      }
+      when = row('Trigger', sel([['close', 'When the bar closes'], ['bar', 'As soon as it happens']], a.when || 'close'));
+      repeat = row('Repeat', sel([['every', 'Every time (once per bar)'], ['once', 'Only once']], a.repeat || 'every'));
+    }
+    if (!a.active) form.appendChild(h('p', { class: 'muted' }, 'This alert already fired; saving turns it on again.'));
+    const m = openModal('Edit alert', form, {
+      footer: [h('button', { class: 'btn ghost danger-text', onclick: () => { m.close(); deleteAlert(a); } }, 'Remove'), h('span', { class: 'spacer' }),
+        h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: () => {
+          if (price) { const v = +price.value; if (!isFinite(v) || v <= 0) { price.focus(); return; } a.price = v; }
+          if (value) { const v = +value.value; if (!isFinite(v)) { value.focus(); return; } a.right = { src: 'value', value: v }; }
+          if (dir) { if (dir.value) a.dir = dir.value; else delete a.dir; }
+          if (op) a.op = op.value;
+          if (when) a.when = when.value;
+          if (repeat) a.repeat = repeat.value;
+          if (!a.kind && lastPx[a.symbol] != null) a.refPrice = lastPx[a.symbol];
+          a.active = true;
+          delete a.triggeredAt;
+          delete a.paused;
+          delete a.lastBarT;
+          // conditions already true on the current bar don't fire for it
+          if (AL.isBar(a)) { const s = slots.find((x) => x.symbol === a.symbol && x.tf === a.tf); if (s && s.chart.raw.length) evaluateMarkerAlert(a, s.chart.raw, true); }
+          m.close();
+          toast(`Alert changed: ${alertTitle(a)}`, 'info', 1800);
+          resyncAlert(a);
+        } }, 'Save')],
+    });
   }
 
   function askNotificationPermission() {
@@ -2995,8 +3085,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       const lines = linesOfDrawing(d);
       if (JSON.stringify(lines) === JSON.stringify(a.lines)) continue;
       a.lines = lines;
-      if (a.server && srv.connected) srvApi('DELETE', '/api/alerts/' + a.id).then(() => srvApi('POST', '/api/alerts', toServer(a))).catch(() => {});
-      save();
+      resyncAlert(a);
     }
   }
 
@@ -3785,6 +3874,13 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     const chart = slot.chart, menu = $('#ctxMenu');
     menu.innerHTML = '';
     const item = (label, fn, cls = '') => menu.appendChild(h('button', { class: 'ctx-item ' + cls, onclick: () => { hideMenus(); fn(); } }, label));
+    if (info.alert) {
+      const a = info.alert;
+      menu.appendChild(h('div', { class: 'ctx-label' }, alertTitle(a)));
+      item('Edit alert…', () => editAlertDialog(a));
+      item('Remove alert', () => deleteAlert(a), 'danger');
+      menu.appendChild(h('div', { class: 'ctx-sep' }));
+    }
     if (info.drawing) {
       item('Delete drawing', () => chart.deleteSelected(), 'danger');
       menu.appendChild(h('div', { class: 'ctx-sep' }));
@@ -3801,6 +3897,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       menu.appendChild(h('div', { class: 'ctx-sep' }));
     }
     item('Reset chart view', () => chart.resetView());
+    item('Chart settings… (colors, background)', openChartSettings);
     item('Add indicator…', openIndicatorPicker);
     item('Compare symbol…', () => openCompareSearch());
     if (slots.length > 1) item('Maximize this chart', () => { state.charts.splice(0, 0, ...state.charts.splice(slots.indexOf(slot), 1)); rebuildSlots('1'); });

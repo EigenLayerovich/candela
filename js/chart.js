@@ -237,6 +237,8 @@
       this.brickInfo = '';    // e.g. "Renko · box 250", shown after the title
       this.trades = null;     // strategy trades to mark on the chart (Strategy Tester)
       this.picking = null;    // a function waiting for a click on the chart (Bar Replay: pick the start)
+      this.measure = null;    // a quick measurement (ruler or Shift+click): { a, b, done }; not saved
+      this.onAlertMove = () => {}; // an alert line was dragged to a new price
       this.title = '';
       this.info = ''; // a line under the title (funding rate, open interest… on futures)
       this.live = false;
@@ -1056,6 +1058,7 @@
           this._drawAlerts(p);
           if (!this.drawingsHidden) for (const dr of this.drawings) if (!dr.hidden) this._drawDrawing(dr, dr === this.selected);
           if (this.creating) this._drawDrawing(this.creating, true);
+          if (this.measure) this._drawMeasure();
         }
         ctx.restore();
         this._drawPriceAxis(p, ticks, step);
@@ -1586,6 +1589,20 @@
       ctx.fillText(txt, lx + w / 2, this.H - this.timeH / 2);
     }
 
+    _drawMeasure() {
+      const DR = DRAW();
+      if (!DR) return;
+      const d = { type: 'measure', pts: [this.measure.a, this.measure.b] }, ctx = this.ctx;
+      ctx.save();
+      try { DR.TOOLS.measure.draw(DR.pen(ctx, this._dapi(), d, false), d.pts.map((q) => this._pt(q)), d); } finally { ctx.restore(); }
+    }
+    // the price alert whose line is under the mouse
+    _hitAlert(x, y) {
+      if (x >= this.plotW) return null;
+      for (const al of this.alerts) if (Math.abs(this.yOf(this.main, al.price) - y) < 5) return al;
+      return null;
+    }
+
     _drawAlerts(p) {
       const ctx = this.ctx, T = this.theme;
       ctx.strokeStyle = T.alert;
@@ -1769,6 +1786,16 @@
           this.invalidate();
           return;
         }
+        // Measure: the ruler tool or Shift+click starts it, the next click ends it, one more removes it
+        if (this.measure && this.measure.done) { this.measure = null; this.invalidate(); if (!e.shiftKey && this.tool !== 'ruler') return; }
+        if (this.measure && !this.measure.done) { this.measure.b = this._pointFromMouse(x, y); this.measure.done = true; this.invalidate(); return; }
+        if (reg.r === 'plot' && reg.p === this.main && (e.shiftKey || this.tool === 'ruler')) {
+          const pt = this._pointFromMouse(x, y);
+          this.measure = { a: pt, b: { ...pt }, done: false, fromDown: true };
+          if (this.tool === 'ruler') { this.tool = 'cursor'; this.onToolDone(); }
+          this.invalidate();
+          return;
+        }
         if (reg.r === 'plot' && this.tool !== 'cursor') {
           if (reg.p !== this.main) return;
           const tool = DRAW() && DRAW().TOOLS[this.tool];
@@ -1822,6 +1849,9 @@
         }
         if (reg.r === 'time') { this.drag = { kind: 'xscale', x, sp: this.spacing }; return; }
         if (reg.r === 'plot') {
+          // drag a price alert's line up or down
+          const al = reg.p === this.main ? this._hitAlert(x, y) : null;
+          if (al) { this.drag = { kind: 'alert', a: al, y, price0: al.price }; c.style.cursor = 'ns-resize'; return; }
           const hit = reg.p === this.main ? this._hitDrawing(x, y) : null;
           if (hit) {
             this.select(hit.d);
@@ -1843,6 +1873,7 @@
         const reg = this._region(x, y);
         this.hover = { x, y, pane: reg.r === 'plot' || reg.r === 'price' ? reg.p : null };
         const dr = this.drag;
+        if (this.measure && !this.measure.done) this.measure.b = this._pointFromMouse(x, y);
         if (this.creating) {
           const pts = this.creating.pts;
           if (this.freehand) {
@@ -1882,6 +1913,12 @@
               this._layout();
               break;
             }
+            case 'alert': {
+              const v = this.vOf(this.main, y);
+              dr.a.price = +v.toFixed(this.decimals);
+              dr.moved = dr.moved || Math.abs(y - dr.y) > 2;
+              break;
+            }
             case 'handle': {
               dr.d.pts[dr.h] = this._pointFromMouse(x, y);
               const tl = DRAW().TOOLS[dr.d.type];
@@ -1901,8 +1938,11 @@
           else if (reg.r === 'time') cur = 'ew-resize';
           else if (reg.r === 'divider') cur = 'row-resize';
           else if (reg.r === 'plot' && this.tool === 'cursor' && reg.p === this.main) {
-            const hit = this._hitDrawing(x, y);
-            if (hit) cur = hit.handle >= 0 ? 'grab' : 'pointer';
+            if (this._hitAlert(x, y)) cur = 'ns-resize';
+            else {
+              const hit = this._hitDrawing(x, y);
+              if (hit) cur = hit.handle >= 0 ? 'grab' : 'pointer';
+            }
           }
           c.style.cursor = cur;
         }
@@ -1915,6 +1955,12 @@
       const end = (e) => {
         const dr = this.drag;
         this.drag = null;
+        if (dr && dr.kind === 'alert') { if (dr.moved && dr.a.price !== dr.price0) this.onAlertMove(dr.a); else dr.a.price = dr.price0; }
+        if (this.measure && !this.measure.done && this.measure.fromDown && this.downAt) {
+          const { x, y } = pos(e);
+          this.measure.fromDown = false;
+          if (Math.hypot(x - this.downAt.x, y - this.downAt.y) > 8) this.measure.done = true; // press-drag-release
+        }
         if (this.creating && this.freehand) this._finishCreating();
         else if (this.creating && this.creatingFromDown && this.downAt) {
           const { x, y } = pos(e);
@@ -1987,16 +2033,18 @@
         e.preventDefault();
         const { x, y } = pos(e), reg = this._region(x, y);
         if (this.creating) { this.creating = null; this.invalidate(); return; }
-        const hit = reg.r === 'plot' && reg.p === this.main ? this._hitDrawing(x, y) : null;
+        const alert = reg.r === 'plot' && reg.p === this.main ? this._hitAlert(x, y) : null;
+        const hit = !alert && reg.r === 'plot' && reg.p === this.main ? this._hitDrawing(x, y) : null;
         if (hit) this.select(hit.d);
         this.onContextMenu({
-          clientX: e.clientX, clientY: e.clientY, drawing: hit ? hit.d : null,
+          clientX: e.clientX, clientY: e.clientY, drawing: hit ? hit.d : null, alert,
           price: reg.p === this.main ? this.vOf(this.main, y) : null,
         });
       });
     }
 
     cancelCreating() {
+      if (this.measure) { this.measure = null; this.invalidate(); return true; }
       if (this.creating) { this.creating = null; this.invalidate(); return true; }
       return false;
     }

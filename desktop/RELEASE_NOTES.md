@@ -1,4 +1,11 @@
-## New in 1.13.0
+## New in 1.14.0
+
+- **Measure**: Shift + click on the chart (or the ruler in the toolbar) for a quick price/%/time measurement.
+- **Alerts**: drag a price alert's line to move it; right-click an alert (on the chart or in the list) to edit or remove it.
+- **Opacity** for every indicator color (0–100%), in the indicator's Style tab.
+- Chart settings (background, colors) are also in the chart's right-click menu.
+
+## In 1.13.0
 
 - **45 more indicators (68 in all)**: Hull, DEMA, TEMA, VWMA, ALMA, KAMA, McGinley and other moving averages, Pivot Points (Traditional/Fibonacci/Woodie/Camarilla), Zig Zag, Williams Alligator and Fractals, MA Cross, Chandelier Exit, Envelopes, Awesome/Accelerator Oscillators, Aroon, Ultimate Oscillator, TRIX, KST, Fisher Transform, PPO, Connors RSI, Coppock, Vortex, TSI, Chaikin Money Flow and Oscillator, Accumulation/Distribution, Force Index, Ease of Movement, Choppiness, Historical Volatility, Bollinger %B and BandWidth, Mass Index and more.
 

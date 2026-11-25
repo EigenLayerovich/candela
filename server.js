@@ -527,6 +527,18 @@ async function handleApi(req, res, url) {
       saveSoon(); syncFeeds(); broadcastState();
       return send(res, 200, { ok: true });
     }
+    if (m === 'PUT') {
+      // the alert was edited or its line dragged: replace it, keeping its place in the list
+      const b = await readJson(req), i = db.alerts.indexOf(a);
+      db.alerts.splice(i, 1);
+      let fresh;
+      try { fresh = await makeAlert({ ...b, id: a.id }); } catch (e) { db.alerts.splice(i, 0, a); throw e; }
+      db.alerts.splice(i, 0, fresh);
+      if (AL.isBar(fresh)) { const f = feeds.get(feedKey(fresh)); if (f && f.ready) evaluate(fresh, f.bars, true); }
+      saveSoon(); syncFeeds(); broadcastState();
+      log('Alert changed:', AL.isMarker(fresh) ? AL.markerTitle(fresh) : AL.isCond(fresh) ? AL.condTitle(fresh) : AL.isLine(fresh) ? AL.lineTitle(fresh) : `${fresh.symbol} crossing ${fresh.price}`);
+      return send(res, 200, fresh);
+    }
     if (m === 'PATCH') {
       // the browser ran this alert while the server was unreachable: take over its progress
       const b = await readJson(req);

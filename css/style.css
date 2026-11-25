@@ -638,3 +638,12 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .saved-name:hover { background: var(--panel-2); }
 .saved-x { border: 0; background: transparent; color: var(--muted); width: 24px; height: 24px; border-radius: 4px; cursor: pointer; }
 .saved-x:hover { color: var(--down); background: var(--panel-2); }
+
+/* ---- opacity sliders (indicator settings) */
+.color-ctl { display: inline-flex; align-items: center; gap: 6px; }
+.op-slider { width: 72px; accent-color: var(--accent); }
+.op-val { font-size: 11px; color: var(--muted); width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
+.style-row { flex-wrap: wrap; row-gap: 6px; }
+/* ---- right-click menus: a heading line, red text buttons */
+.ctx-label { padding: 6px 12px 4px; font-size: 11px; font-weight: 700; color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn.danger-text { color: var(--down); }

@@ -608,7 +608,7 @@
     // thickness (grades 1-4), line type and price line of one line of an indicator
     plotStyle(ind, pl) {
       const st = (ind.styles && ind.styles[pl.key]) || {};
-      return { width: LINE_WIDTHS[st.width] || pl.width || 1.25, grade: st.width || null, type: LINE_TYPES.includes(st.type) ? st.type : 'line', priceLine: !!st.priceLine };
+      return { width: LINE_WIDTHS[st.width] || pl.width || 1.25, grade: st.width || null, type: LINE_TYPES.includes(st.type) ? st.type : pl.lineType || 'line', priceLine: !!st.priceLine };
     }
 
     // ------------------------------------------------------------------ comparison overlays
@@ -826,7 +826,7 @@
       if (ind.pane === this.main) return this.fmtPrice(v);
       const a = Math.abs(v);
       if (a >= 1e5) return fmtCompact(v);
-      return v.toFixed(a >= 100 ? 2 : a >= 1 ? 2 : a >= 0.01 ? 4 : 6);
+      return v.toFixed(a >= 1 || a === 0 ? 2 : a >= 0.01 ? 4 : 6);
     }
 
     // ------------------------------------------------------------------ coordinates

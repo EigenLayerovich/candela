@@ -528,6 +528,483 @@
     },
   ];
 
+  // ================================================================ more indicators
+  // ---------- helpers ----------
+  function rsum(a, n) {
+    const out = nanArr(a.length);
+    let s = 0, cnt = 0;
+    for (let i = 0; i < a.length; i++) {
+      const v = a[i];
+      if (v !== v) { s = 0; cnt = 0; continue; }
+      s += v; cnt++;
+      if (cnt > n) { s -= a[i - n]; cnt = n; }
+      if (cnt === n) out[i] = s;
+    }
+    return out;
+  }
+  const change = (a, n = 1) => a.map((v, i) => (i >= n ? v - a[i - n] : NaN));
+  const rocOf = (a, n) => a.map((v, i) => (i >= n && a[i - n] ? (100 * (v - a[i - n])) / a[i - n] : NaN));
+  const shiftFwd = (a, k) => a.map((_, i) => (i - k >= 0 ? a[i - k] : NaN));
+  const sub = (a, b) => a.map((v, i) => v - b[i]);
+  const HL2 = (bars) => bars.map((b) => (b.h + b.l) / 2);
+  const C = (bars) => bars.map((b) => b.c);
+  const V = (bars) => bars.map((b) => b.v || 0);
+  // the bars' interval in ms (median gap)
+  function intervalOf(bars) {
+    const g = [];
+    for (let i = Math.max(1, bars.length - 200); i < bars.length; i++) g.push(bars[i].t - bars[i - 1].t);
+    g.sort((x, y) => x - y);
+    return g.length ? g[g.length >> 1] : 86400e3;
+  }
+  function linreg(a, n) {
+    const out = nanArr(a.length), sx = (n * (n - 1)) / 2, sxx = ((n - 1) * n * (2 * n - 1)) / 6, den = n * sxx - sx * sx;
+    for (let i = n - 1; i < a.length; i++) {
+      let sy = 0, sxy = 0, ok = true;
+      for (let j = 0; j < n; j++) { const v = a[i - n + 1 + j]; if (v !== v) { ok = false; break; } sy += v; sxy += j * v; }
+      if (!ok) continue;
+      const slope = den ? (n * sxy - sx * sy) / den : 0, icpt = (sy - slope * sx) / n;
+      out[i] = icpt + slope * (n - 1);
+    }
+    return out;
+  }
+  const UPDN = ['#22AB94', '#F7525F'];
+  const dirIdx = (a) => a.map((v, i) => (i && v < a[i - 1] ? 1 : 0)); // 0 rising (green), 1 falling (red)
+  const MA_IN = (d, label = 'Length') => ({ key: 'length', label, type: 'int', def: d, min: 1, max: 2000 });
+
+  const MORE = [
+    // ---------------- moving averages and overlays ----------------
+    {
+      id: 'hma', name: 'Hull Moving Average', short: 'HMA', overlay: true, desc: 'Fast, smooth moving average with little lag',
+      inputs: [LEN(9), SRC], plots: [{ key: 'ma', name: 'HMA', color: '#2EC4B6' }],
+      calc(bars, p) { const s = source(bars, p.source), n = p.length; return { ma: wma(sub(wma(s, Math.max(1, Math.round(n / 2))).map((v) => 2 * v), wma(s, n)), Math.max(1, Math.round(Math.sqrt(n)))) }; },
+    },
+    {
+      id: 'dema', name: 'Double EMA', short: 'DEMA', overlay: true, desc: 'Double exponential moving average (less lag)',
+      inputs: [LEN(9), SRC], plots: [{ key: 'ma', name: 'DEMA', color: '#9C6ADE' }],
+      calc(bars, p) { const e1 = ema(source(bars, p.source), p.length), e2 = ema(e1, p.length); return { ma: e1.map((v, i) => 2 * v - e2[i]) }; },
+    },
+    {
+      id: 'tema', name: 'Triple EMA', short: 'TEMA', overlay: true, desc: 'Triple exponential moving average (even less lag)',
+      inputs: [LEN(9), SRC], plots: [{ key: 'ma', name: 'TEMA', color: '#E040FB' }],
+      calc(bars, p) { const e1 = ema(source(bars, p.source), p.length), e2 = ema(e1, p.length), e3 = ema(e2, p.length); return { ma: e1.map((v, i) => 3 * v - 3 * e2[i] + e3[i]) }; },
+    },
+    {
+      id: 'vwma', name: 'Volume-Weighted Moving Average', short: 'VWMA', overlay: true, desc: 'Moving average weighted by volume',
+      inputs: [LEN(20), SRC], plots: [{ key: 'ma', name: 'VWMA', color: '#3D8BFD' }],
+      calc(bars, p) { const s = source(bars, p.source), v = V(bars), pv = rsum(s.map((x, i) => x * v[i]), p.length), vv = rsum(v, p.length); return { ma: pv.map((x, i) => (vv[i] ? x / vv[i] : NaN)) }; },
+    },
+    {
+      id: 'alma', name: 'Arnaud Legoux Moving Average', short: 'ALMA', overlay: true, desc: 'Gaussian-weighted moving average',
+      inputs: [LEN(9), { key: 'offset', label: 'Offset', type: 'float', def: 0.85, min: 0, max: 1, step: 0.05 }, { key: 'sigma', label: 'Sigma', type: 'float', def: 6, min: 0.1, step: 0.5 }, SRC],
+      plots: [{ key: 'ma', name: 'ALMA', color: '#F5A623' }],
+      calc(bars, p) {
+        const s = source(bars, p.source), n = p.length, m = p.offset * (n - 1), sg = n / p.sigma, w = [];
+        for (let j = 0; j < n; j++) w.push(Math.exp(-((j - m) ** 2) / (2 * sg * sg)));
+        const ws = w.reduce((a, b) => a + b, 0), out = nanArr(s.length);
+        for (let i = n - 1; i < s.length; i++) { let t = 0; for (let j = 0; j < n; j++) t += w[j] * s[i - n + 1 + j]; out[i] = t / ws; }
+        return { ma: out };
+      },
+    },
+    {
+      id: 'smma', name: 'Smoothed Moving Average', short: 'SMMA', overlay: true, desc: 'Wilder\'s smoothed moving average (RMA)',
+      inputs: [LEN(7), SRC], plots: [{ key: 'ma', name: 'SMMA', color: '#8BC34A' }],
+      calc: (bars, p) => ({ ma: rma(source(bars, p.source), p.length) }),
+    },
+    {
+      id: 'kama', name: 'Kaufman Adaptive Moving Average', short: 'KAMA', overlay: true, desc: 'Speeds up in trends, slows down in noise',
+      inputs: [LEN(10), { key: 'fast', label: 'Fast length', type: 'int', def: 2, min: 1 }, { key: 'slow', label: 'Slow length', type: 'int', def: 30, min: 2 }, SRC],
+      plots: [{ key: 'ma', name: 'KAMA', color: '#2EC4B6' }],
+      calc(bars, p) {
+        const s = source(bars, p.source), n = p.length, out = nanArr(s.length), f = 2 / (p.fast + 1), sl = 2 / (p.slow + 1);
+        let k = NaN;
+        for (let i = n; i < s.length; i++) {
+          let vol = 0;
+          for (let j = i - n + 1; j <= i; j++) vol += Math.abs(s[j] - s[j - 1]);
+          const er = vol ? Math.abs(s[i] - s[i - n]) / vol : 0, sc = (er * (f - sl) + sl) ** 2;
+          k = k !== k ? s[i - 1] : k;
+          k += sc * (s[i] - k);
+          out[i] = k;
+        }
+        return { ma: out };
+      },
+    },
+    {
+      id: 'lsma', name: 'Least Squares Moving Average', short: 'LSMA', overlay: true, desc: 'End point of a linear regression (linear regression curve)',
+      inputs: [LEN(25), SRC], plots: [{ key: 'ma', name: 'LSMA', color: '#3D8BFD' }],
+      calc: (bars, p) => ({ ma: linreg(source(bars, p.source), p.length) }),
+    },
+    {
+      id: 'mcginley', name: 'McGinley Dynamic', short: 'McGinley', overlay: true, desc: 'Moving average that adjusts to the market\'s speed',
+      inputs: [LEN(14), SRC], plots: [{ key: 'ma', name: 'McGinley', color: '#F7525F' }],
+      calc(bars, p) {
+        const s = source(bars, p.source), out = nanArr(s.length), e = ema(s, p.length);
+        let md = NaN;
+        for (let i = 0; i < s.length; i++) {
+          if (md !== md) { md = e[i]; out[i] = md; continue; }
+          md = md + (s[i] - md) / (p.length * Math.pow(s[i] / md, 4));
+          out[i] = md;
+        }
+        return { ma: out };
+      },
+    },
+    {
+      id: 'env', name: 'Envelopes', short: 'Env', overlay: true, desc: 'A moving average with bands a fixed percentage above and below',
+      inputs: [LEN(20), { key: 'pct', label: 'Percent', type: 'float', def: 10, min: 0.01, step: 0.5 }, { key: 'type', label: 'MA type', type: 'select', options: MA_TYPES, def: 'SMA' }, SRC],
+      plots: [{ key: 'upper', name: 'Upper', color: '#F7525F' }, { key: 'basis', name: 'Basis', color: '#F5A623' }, { key: 'lower', name: 'Lower', color: '#22AB94' }],
+      fills: [{ key: 'bg', from: 'upper', to: 'lower', color: 'rgba(61,139,253,0.05)' }],
+      calc(bars, p) { const m = maOf(p.type, source(bars, p.source), p.length), k = p.pct / 100; return { basis: m, upper: m.map((v) => v * (1 + k)), lower: m.map((v) => v * (1 - k)) }; },
+    },
+    {
+      id: 'pivots', name: 'Pivot Points Standard', short: 'Pivots', overlay: true, desc: 'Support and resistance levels from the previous day, week, month or year',
+      inputs: [
+        { key: 'type', label: 'Type', type: 'select', options: ['Traditional', 'Fibonacci', 'Woodie', 'Camarilla'], def: 'Traditional' },
+        { key: 'period', label: 'Pivots timeframe', type: 'select', options: ['Auto', 'Day', 'Week', 'Month', 'Year'], def: 'Auto' },
+      ],
+      plots: [
+        { key: 'r3', name: 'R3', color: '#F7525F', lineType: 'linebr' }, { key: 'r2', name: 'R2', color: '#F7525F', lineType: 'linebr' }, { key: 'r1', name: 'R1', color: '#F7525F', lineType: 'linebr' },
+        { key: 'p', name: 'P', color: '#F5A623', lineType: 'linebr', width: 1.5 },
+        { key: 's1', name: 'S1', color: '#22AB94', lineType: 'linebr' }, { key: 's2', name: 'S2', color: '#22AB94', lineType: 'linebr' }, { key: 's3', name: 'S3', color: '#22AB94', lineType: 'linebr' },
+      ],
+      calc(bars, p) {
+        const iv = intervalOf(bars), D = 86400e3;
+        let per = p.period;
+        if (per === 'Auto') per = iv <= 15 * 60e3 ? 'Day' : iv < D ? 'Week' : iv <= D ? 'Month' : 'Year';
+        const key = (t) => { const d = new Date(t); return per === 'Day' ? Math.floor(t / D) : per === 'Week' ? Math.floor((t / D + 3) / 7) : per === 'Month' ? d.getUTCFullYear() * 12 + d.getUTCMonth() : d.getUTCFullYear(); };
+        const n = bars.length, out = { r3: nanArr(n), r2: nanArr(n), r1: nanArr(n), p: nanArr(n), s1: nanArr(n), s2: nanArr(n), s3: nanArr(n) };
+        // the high, low and close of each period
+        const per2 = [];
+        for (let i = 0; i < n; i++) {
+          const b = bars[i], kk = key(b.t), last = per2[per2.length - 1];
+          if (last && last.k === kk) { last.H = Math.max(last.H, b.h); last.L = Math.min(last.L, b.l); last.C = b.c; last.end = i; }
+          else per2.push({ k: kk, H: b.h, L: b.l, C: b.c, start: i, end: i });
+        }
+        for (let j = 1; j < per2.length; j++) {
+          const { H, L, C: Cl } = per2[j - 1], R = H - L, P = p.type === 'Woodie' ? (H + L + 2 * Cl) / 4 : (H + L + Cl) / 3;
+          let lv;
+          if (p.type === 'Fibonacci') lv = { p: P, r1: P + 0.382 * R, r2: P + 0.618 * R, r3: P + R, s1: P - 0.382 * R, s2: P - 0.618 * R, s3: P - R };
+          else if (p.type === 'Camarilla') lv = { p: P, r1: Cl + (R * 1.1) / 12, r2: Cl + (R * 1.1) / 6, r3: Cl + (R * 1.1) / 4, s1: Cl - (R * 1.1) / 12, s2: Cl - (R * 1.1) / 6, s3: Cl - (R * 1.1) / 4 };
+          else lv = { p: P, r1: 2 * P - L, r2: P + R, r3: H + 2 * (P - L), s1: 2 * P - H, s2: P - R, s3: L - 2 * (H - P) }; // Traditional and Woodie
+          // periods of several candles get a gap on their first candle, so each period's levels stand apart
+          const from = per2[j].end - per2[j].start >= 2 ? per2[j].start + 1 : per2[j].start;
+          for (let i = from; i <= per2[j].end; i++) for (const x of Object.keys(out)) out[x][i] = lv[x];
+        }
+        return out;
+      },
+    },
+    {
+      id: 'zigzag', name: 'Zig Zag', short: 'ZigZag', overlay: true, desc: 'Joins the swing highs and lows that moved at least the deviation',
+      inputs: [{ key: 'dev', label: 'Deviation %', type: 'float', def: 5, min: 0.1, step: 0.5 }],
+      plots: [{ key: 'zz', name: 'Zig Zag', color: '#F5A623', width: 1.5 }],
+      calc(bars, p) {
+        const n = bars.length, out = nanArr(n), d = p.dev / 100;
+        if (!n) return { zz: out };
+        let dir = 0, pi = 0, pp = bars[0].c, hiI = 0, loI = 0;
+        out[0] = bars[0].c;
+        for (let i = 1; i < n; i++) {
+          const b = bars[i];
+          if (dir >= 0 && b.h >= pp && dir === 1) { pi = i; pp = b.h; }
+          else if (dir <= 0 && b.l <= pp && dir === -1) { pi = i; pp = b.l; }
+          if (dir === 0) {
+            if (b.h > bars[hiI].h) hiI = i;
+            if (b.l < bars[loI].l) loI = i;
+            if (bars[hiI].h >= bars[0].c * (1 + d)) { dir = 1; pi = hiI; pp = bars[hiI].h; }
+            else if (bars[loI].l <= bars[0].c * (1 - d)) { dir = -1; pi = loI; pp = bars[loI].l; }
+            continue;
+          }
+          if (dir === 1 && b.l <= pp * (1 - d)) { out[pi] = pp; dir = -1; pi = i; pp = b.l; }
+          else if (dir === -1 && b.h >= pp * (1 + d)) { out[pi] = pp; dir = 1; pi = i; pp = b.h; }
+        }
+        if (dir) out[pi] = pp; // the swing still in progress
+        return { zz: out };
+      },
+    },
+    {
+      id: 'alligator', name: 'Williams Alligator', short: 'Alligator', overlay: true, desc: 'Three smoothed averages shifted forward: jaw, teeth and lips',
+      inputs: [
+        { key: 'jaw', label: 'Jaw length', type: 'int', def: 13, min: 1 }, { key: 'teeth', label: 'Teeth length', type: 'int', def: 8, min: 1 }, { key: 'lips', label: 'Lips length', type: 'int', def: 5, min: 1 },
+        { key: 'jawOff', label: 'Jaw offset', type: 'int', def: 8, min: 0 }, { key: 'teethOff', label: 'Teeth offset', type: 'int', def: 5, min: 0 }, { key: 'lipsOff', label: 'Lips offset', type: 'int', def: 3, min: 0 },
+      ],
+      plots: [{ key: 'jaw', name: 'Jaw', color: '#2962FF' }, { key: 'teeth', name: 'Teeth', color: '#E91E63' }, { key: 'lips', name: 'Lips', color: '#66BB6A' }],
+      calc(bars, p) { const s = HL2(bars); return { jaw: shiftFwd(rma(s, p.jaw), p.jawOff), teeth: shiftFwd(rma(s, p.teeth), p.teethOff), lips: shiftFwd(rma(s, p.lips), p.lipsOff) }; },
+    },
+    {
+      id: 'fractals', name: 'Williams Fractals', short: 'Fractals', overlay: true, desc: 'Marks a high (or low) with lower highs (higher lows) on both sides',
+      inputs: [{ key: 'n', label: 'Bars on each side', type: 'int', def: 2, min: 1, max: 10 }],
+      plots: [{ key: 'up', name: 'Up fractal', style: 'mark', position: 'above', color: '#22AB94' }, { key: 'dn', name: 'Down fractal', style: 'mark', position: 'below', color: '#F7525F' }],
+      calc(bars, p) {
+        const n = bars.length, k = p.n, up = new Array(n).fill(0), dn = new Array(n).fill(0);
+        for (let i = k; i < n - k; i++) {
+          let u = true, d = true;
+          for (let j = 1; j <= k; j++) {
+            if (!(bars[i].h > bars[i - j].h && bars[i].h > bars[i + j].h)) u = false;
+            if (!(bars[i].l < bars[i - j].l && bars[i].l < bars[i + j].l)) d = false;
+          }
+          up[i] = u ? 1 : 0; dn[i] = d ? 1 : 0;
+        }
+        return { up, dn };
+      },
+    },
+    {
+      id: 'macross', name: 'Moving Average Cross', short: 'MA Cross', overlay: true, desc: 'Two moving averages with markers where they cross',
+      inputs: [
+        { key: 'fast', label: 'Fast length', type: 'int', def: 9, min: 1 }, { key: 'slow', label: 'Slow length', type: 'int', def: 21, min: 1 },
+        { key: 'type', label: 'MA type', type: 'select', options: MA_TYPES, def: 'EMA' }, SRC,
+      ],
+      plots: [
+        { key: 'fast', name: 'Fast', color: '#3D8BFD' }, { key: 'slow', name: 'Slow', color: '#F5A623' },
+        { key: 'up', name: 'Cross up', style: 'mark', position: 'below', color: '#22AB94' }, { key: 'dn', name: 'Cross down', style: 'mark', position: 'above', color: '#F7525F' },
+      ],
+      calc(bars, p) {
+        const s = source(bars, p.source), f = maOf(p.type, s, p.fast), sl = maOf(p.type, s, p.slow);
+        const up = f.map((v, i) => (i && f[i - 1] <= sl[i - 1] && v > sl[i] ? 1 : 0)), dn = f.map((v, i) => (i && f[i - 1] >= sl[i - 1] && v < sl[i] ? 1 : 0));
+        return { fast: f, slow: sl, up, dn };
+      },
+    },
+    {
+      id: 'chandelier', name: 'Chandelier Exit', short: 'Chandelier', overlay: true, desc: 'Trailing stop a multiple of ATR from the highest high / lowest low',
+      inputs: [{ key: 'length', label: 'ATR period', type: 'int', def: 22, min: 1 }, { key: 'mult', label: 'ATR multiplier', type: 'float', def: 3, min: 0.1, step: 0.1 }],
+      plots: [
+        { key: 'long', name: 'Long stop', color: '#22AB94', lineType: 'linebr' }, { key: 'short', name: 'Short stop', color: '#F7525F', lineType: 'linebr' },
+        { key: 'buy', name: 'Buy', style: 'mark', position: 'below', color: '#22AB94' }, { key: 'sell', name: 'Sell', style: 'mark', position: 'above', color: '#F7525F' },
+      ],
+      calc(bars, p) {
+        const n = bars.length, a = atr(bars, p.length), hh = highest(C(bars), p.length), ll = lowest(C(bars), p.length);
+        const L = nanArr(n), S = nanArr(n), buy = new Array(n).fill(0), sell = new Array(n).fill(0);
+        let ls = NaN, ss = NaN, dir = 1;
+        for (let i = 0; i < n; i++) {
+          if (!isFinite(a[i]) || !isFinite(hh[i])) continue;
+          let l = hh[i] - p.mult * a[i], s = ll[i] + p.mult * a[i];
+          if (isFinite(ls) && bars[i - 1].c > ls) l = Math.max(l, ls);
+          if (isFinite(ss) && bars[i - 1].c < ss) s = Math.min(s, ss);
+          const nd = bars[i].c > ss ? 1 : bars[i].c < ls ? -1 : dir;
+          if (nd !== dir) { if (nd === 1) buy[i] = 1; else sell[i] = 1; }
+          dir = nd; ls = l; ss = s;
+          if (dir === 1) L[i] = l; else S[i] = s;
+        }
+        return { long: L, short: S, buy, sell };
+      },
+    },
+
+    // ---------------- oscillators ----------------
+    {
+      id: 'ao', name: 'Awesome Oscillator', short: 'AO', overlay: false, desc: 'Momentum: 5-bar minus 34-bar average of the midpoint',
+      inputs: [], plots: [{ key: 'ao', name: 'AO', style: 'histogram', palette: UPDN }], levels: [0],
+      calc(bars) { const m = HL2(bars), ao = sub(sma(m, 5), sma(m, 34)); return { ao, ao$i: dirIdx(ao) }; },
+    },
+    {
+      id: 'ac', name: 'Accelerator Oscillator', short: 'AC', overlay: false, desc: 'Awesome Oscillator minus its 5-bar average',
+      inputs: [], plots: [{ key: 'ac', name: 'AC', style: 'histogram', palette: UPDN }], levels: [0],
+      calc(bars) { const m = HL2(bars), ao = sub(sma(m, 5), sma(m, 34)), ac = sub(ao, sma(ao, 5)); return { ac, ac$i: dirIdx(ac) }; },
+    },
+    {
+      id: 'aroon', name: 'Aroon', short: 'Aroon', overlay: false, desc: 'How recently the highest high and lowest low happened (0–100)',
+      inputs: [LEN(14)], plots: [{ key: 'up', name: 'Aroon Up', color: '#F5A623' }, { key: 'dn', name: 'Aroon Down', color: '#3D8BFD' }], range: [0, 100], levels: [70, 30],
+      calc(bars, p) {
+        const n = p.length, up = nanArr(bars.length), dn = nanArr(bars.length);
+        for (let i = n; i < bars.length; i++) {
+          let hi = i, lo = i;
+          for (let j = i - n; j <= i; j++) { if (bars[j].h >= bars[hi].h) hi = j; if (bars[j].l <= bars[lo].l) lo = j; }
+          up[i] = (100 * (n - (i - hi))) / n; dn[i] = (100 * (n - (i - lo))) / n;
+        }
+        return { up, dn };
+      },
+    },
+    {
+      id: 'cmf', name: 'Chaikin Money Flow', short: 'CMF', overlay: false, desc: 'Buying vs selling pressure over N bars (−1 to 1)',
+      inputs: [LEN(20)], plots: [{ key: 'cmf', name: 'CMF', color: '#2EC4B6' }], levels: [0],
+      calc(bars, p) {
+        const mfv = bars.map((b) => (b.h === b.l ? 0 : ((b.c - b.l - (b.h - b.c)) / (b.h - b.l)) * (b.v || 0)));
+        const a = rsum(mfv, p.length), v = rsum(V(bars), p.length);
+        return { cmf: a.map((x, i) => (v[i] ? x / v[i] : NaN)) };
+      },
+    },
+    {
+      id: 'adl', name: 'Accumulation/Distribution', short: 'Accum/Dist', overlay: false, desc: 'Running total of money flow volume',
+      inputs: [], plots: [{ key: 'adl', name: 'A/D', color: '#9C6ADE', format: 'volume' }],
+      calc(bars) { let s = 0; return { adl: bars.map((b) => (s += b.h === b.l ? 0 : ((b.c - b.l - (b.h - b.c)) / (b.h - b.l)) * (b.v || 0))) }; },
+    },
+    {
+      id: 'chaikinosc', name: 'Chaikin Oscillator', short: 'Chaikin Osc', overlay: false, desc: 'Fast minus slow EMA of Accumulation/Distribution',
+      inputs: [{ key: 'fast', label: 'Fast length', type: 'int', def: 3, min: 1 }, { key: 'slow', label: 'Slow length', type: 'int', def: 10, min: 1 }],
+      plots: [{ key: 'co', name: 'Chaikin Osc', color: '#F7525F', format: 'volume' }], levels: [0],
+      calc(bars, p) { let s = 0; const adl = bars.map((b) => (s += b.h === b.l ? 0 : ((b.c - b.l - (b.h - b.c)) / (b.h - b.l)) * (b.v || 0))); return { co: sub(ema(adl, p.fast), ema(adl, p.slow)) }; },
+    },
+    {
+      id: 'uo', name: 'Ultimate Oscillator', short: 'UO', overlay: false, desc: 'Buying pressure over three timeframes (0–100)',
+      inputs: [{ key: 'a', label: 'Fast length', type: 'int', def: 7, min: 1 }, { key: 'b', label: 'Middle length', type: 'int', def: 14, min: 1 }, { key: 'c', label: 'Slow length', type: 'int', def: 28, min: 1 }],
+      plots: [{ key: 'uo', name: 'UO', color: '#F7525F' }], levels: [70, 30], range: [0, 100],
+      calc(bars, p) {
+        const bp = bars.map((b, i) => (i ? b.c - Math.min(b.l, bars[i - 1].c) : NaN)), tr = bars.map((b, i) => (i ? Math.max(b.h, bars[i - 1].c) - Math.min(b.l, bars[i - 1].c) : NaN));
+        const avg = (n) => { const x = rsum(bp, n), y = rsum(tr, n); return x.map((v, i) => (y[i] ? v / y[i] : NaN)); };
+        const a = avg(p.a), b = avg(p.b), c = avg(p.c);
+        return { uo: a.map((v, i) => (100 * (4 * v + 2 * b[i] + c[i])) / 7) };
+      },
+    },
+    {
+      id: 'trix', name: 'TRIX', short: 'TRIX', overlay: false, desc: 'Rate of change of a triple-smoothed EMA',
+      inputs: [LEN(18)], plots: [{ key: 'trix', name: 'TRIX', color: '#F7525F' }], levels: [0],
+      calc(bars, p) { const lc = C(bars).map(Math.log), e = ema(ema(ema(lc, p.length), p.length), p.length); return { trix: change(e).map((v) => v * 10000) }; },
+    },
+    {
+      id: 'kst', name: 'Know Sure Thing', short: 'KST', overlay: false, desc: 'Weighted sum of four smoothed rates of change',
+      inputs: [{ key: 'signal', label: 'Signal length', type: 'int', def: 9, min: 1 }],
+      plots: [{ key: 'kst', name: 'KST', color: '#22AB94' }, { key: 'sig', name: 'Signal', color: '#F7525F' }], levels: [0],
+      calc(bars, p) {
+        const c = C(bars), r = (a, b) => sma(rocOf(c, a), b);
+        const r1 = r(10, 10), r2 = r(15, 10), r3 = r(20, 10), r4 = r(30, 15), kst = r1.map((v, i) => v + 2 * r2[i] + 3 * r3[i] + 4 * r4[i]);
+        return { kst, sig: sma(kst, p.signal) };
+      },
+    },
+    {
+      id: 'fisher', name: 'Fisher Transform', short: 'Fisher', overlay: false, desc: 'Turns prices into a clearer turning-point signal',
+      inputs: [LEN(9)], plots: [{ key: 'fish', name: 'Fisher', color: '#3D8BFD' }, { key: 'trig', name: 'Trigger', color: '#F5A623' }], levels: [1.5, 0.75, 0, -0.75, -1.5],
+      calc(bars, p) {
+        const m = HL2(bars), hh = highest(m, p.length), ll = lowest(m, p.length), n = bars.length, fish = nanArr(n), trig = nanArr(n);
+        let v = 0, f = 0;
+        for (let i = 0; i < n; i++) {
+          if (!isFinite(hh[i])) continue;
+          const r = hh[i] - ll[i];
+          v = 0.66 * ((r ? (m[i] - ll[i]) / r : 0.5) - 0.5) + 0.67 * v;
+          v = Math.max(-0.999, Math.min(0.999, v));
+          trig[i] = f;
+          f = 0.5 * Math.log((1 + v) / (1 - v)) + 0.5 * f;
+          fish[i] = f;
+        }
+        return { fish, trig };
+      },
+    },
+    {
+      id: 'mom', name: 'Momentum', short: 'Mom', overlay: false, desc: 'Price now minus price N bars ago',
+      inputs: [LEN(10), SRC], plots: [{ key: 'mom', name: 'Momentum', color: '#3D8BFD' }], levels: [0],
+      calc: (bars, p) => ({ mom: change(source(bars, p.source), p.length) }),
+    },
+    {
+      id: 'ppo', name: 'Percentage Price Oscillator', short: 'PPO', overlay: false, desc: 'MACD as a percentage of the slow average',
+      inputs: [{ key: 'fast', label: 'Fast length', type: 'int', def: 12, min: 1 }, { key: 'slow', label: 'Slow length', type: 'int', def: 26, min: 1 }, { key: 'signal', label: 'Signal length', type: 'int', def: 9, min: 1 }, SRC],
+      plots: [{ key: 'hist', name: 'Histogram', style: 'histogram', palette: UPDN }, { key: 'ppo', name: 'PPO', color: '#3D8BFD' }, { key: 'sig', name: 'Signal', color: '#F5A623' }], levels: [0],
+      calc(bars, p) {
+        const s = source(bars, p.source), f = ema(s, p.fast), sl = ema(s, p.slow), ppo = f.map((v, i) => (100 * (v - sl[i])) / sl[i]), sig = ema(ppo, p.signal), hist = sub(ppo, sig);
+        return { ppo, sig, hist, hist$i: hist.map((v) => (v >= 0 ? 0 : 1)) };
+      },
+    },
+    {
+      id: 'dpo', name: 'Detrended Price Oscillator', short: 'DPO', overlay: false, desc: 'Price minus an earlier moving average, to show cycles',
+      inputs: [LEN(21)], plots: [{ key: 'dpo', name: 'DPO', color: '#2EC4B6' }], levels: [0],
+      calc(bars, p) { const c = C(bars), ma = sma(c, p.length), k = Math.floor(p.length / 2) + 1; return { dpo: c.map((v, i) => (i >= k ? v - ma[i - k] : NaN)) }; },
+    },
+    {
+      id: 'efi', name: 'Elder Force Index', short: 'EFI', overlay: false, desc: 'Price change times volume, smoothed',
+      inputs: [LEN(13)], plots: [{ key: 'efi', name: 'EFI', color: '#F7525F', format: 'volume' }], levels: [0],
+      calc(bars, p) { const c = C(bars); return { efi: ema(c.map((v, i) => (i ? (v - c[i - 1]) * (bars[i].v || 0) : NaN)), p.length) }; },
+    },
+    {
+      id: 'eom', name: 'Ease of Movement', short: 'EOM', overlay: false, desc: 'How easily price moves for the volume traded',
+      inputs: [LEN(14), { key: 'div', label: 'Divisor', type: 'int', def: 10000, min: 1 }], plots: [{ key: 'eom', name: 'EOM', color: '#22AB94' }], levels: [0],
+      calc(bars, p) { const m = HL2(bars); return { eom: sma(bars.map((b, i) => (i && b.v ? (p.div * (m[i] - m[i - 1]) * (b.h - b.l)) / b.v : NaN)), p.length) }; },
+    },
+    {
+      id: 'chop', name: 'Choppiness Index', short: 'CHOP', overlay: false, desc: 'Trending (low) or sideways (high), 0–100',
+      inputs: [LEN(14)], plots: [{ key: 'chop', name: 'CHOP', color: '#3D8BFD' }], levels: [61.8, 38.2], bandFill: [61.8, 38.2], range: [0, 100],
+      calc(bars, p) {
+        const n = p.length, s = rsum(trueRange(bars), n), hh = highest(bars.map((b) => b.h), n), ll = lowest(bars.map((b) => b.l), n);
+        return { chop: s.map((v, i) => (hh[i] - ll[i] > 0 ? (100 * Math.log10(v / (hh[i] - ll[i]))) / Math.log10(n) : NaN)) };
+      },
+    },
+    {
+      id: 'hv', name: 'Historical Volatility', short: 'HV', overlay: false, desc: 'Annualized standard deviation of returns, in %',
+      inputs: [LEN(10)], plots: [{ key: 'hv', name: 'HV', color: '#3D8BFD' }],
+      calc(bars, p) {
+        const c = C(bars), r = c.map((v, i) => (i ? Math.log(v / c[i - 1]) : NaN)), perYear = (365 * 86400e3) / intervalOf(bars);
+        return { hv: stdev(r, p.length).map((v) => 100 * v * Math.sqrt(perYear)) };
+      },
+    },
+    {
+      id: 'bbpct', name: 'Bollinger Bands %B', short: '%B', overlay: false, desc: 'Where price sits inside the Bollinger Bands (0 = lower, 1 = upper)',
+      inputs: [LEN(20), { key: 'mult', label: 'StdDev', type: 'float', def: 2, min: 0.1, step: 0.1 }, SRC],
+      plots: [{ key: 'b', name: '%B', color: '#2EC4B6' }], levels: [1, 0.5, 0], bandFill: [1, 0],
+      calc(bars, p) { const s = source(bars, p.source), m = sma(s, p.length), d = stdev(s, p.length); return { b: s.map((v, i) => (d[i] ? (v - (m[i] - p.mult * d[i])) / (2 * p.mult * d[i]) : NaN)) }; },
+    },
+    {
+      id: 'bbw', name: 'Bollinger BandWidth', short: 'BBW', overlay: false, desc: 'Width of the Bollinger Bands relative to the middle (squeezes)',
+      inputs: [LEN(20), { key: 'mult', label: 'StdDev', type: 'float', def: 2, min: 0.1, step: 0.1 }, SRC],
+      plots: [{ key: 'w', name: 'BBW', color: '#F5A623' }],
+      calc(bars, p) { const s = source(bars, p.source), m = sma(s, p.length), d = stdev(s, p.length); return { w: m.map((v, i) => (v ? (2 * p.mult * d[i]) / v : NaN)) }; },
+    },
+    {
+      id: 'crsi', name: 'Connors RSI', short: 'CRSI', overlay: false, desc: 'Average of a short RSI, the RSI of up/down streaks, and the rank of the last change',
+      inputs: [{ key: 'rsi', label: 'RSI length', type: 'int', def: 3, min: 1 }, { key: 'streak', label: 'Up/down length', type: 'int', def: 2, min: 1 }, { key: 'rank', label: 'Rank length', type: 'int', def: 100, min: 1 }],
+      plots: [{ key: 'crsi', name: 'CRSI', color: '#3D8BFD' }], levels: [70, 30], bandFill: [70, 30], range: [0, 100],
+      calc(bars, p) {
+        const c = C(bars), n = c.length, st = new Array(n).fill(0);
+        for (let i = 1; i < n; i++) st[i] = c[i] > c[i - 1] ? (st[i - 1] > 0 ? st[i - 1] + 1 : 1) : c[i] < c[i - 1] ? (st[i - 1] < 0 ? st[i - 1] - 1 : -1) : 0;
+        const r1 = rsiOf(c, p.rsi), r2 = rsiOf(st, p.streak), ch = rocOf(c, 1), rank = nanArr(n);
+        for (let i = p.rank; i < n; i++) { let k = 0; for (let j = i - p.rank; j < i; j++) if (ch[j] < ch[i]) k++; rank[i] = (100 * k) / p.rank; }
+        return { crsi: r1.map((v, i) => (v + r2[i] + rank[i]) / 3) };
+      },
+    },
+    {
+      id: 'coppock', name: 'Coppock Curve', short: 'Coppock', overlay: false, desc: 'Long-term momentum: weighted average of two rates of change',
+      inputs: [{ key: 'wma', label: 'WMA length', type: 'int', def: 10, min: 1 }, { key: 'long', label: 'Long ROC', type: 'int', def: 14, min: 1 }, { key: 'short', label: 'Short ROC', type: 'int', def: 11, min: 1 }],
+      plots: [{ key: 'cc', name: 'Coppock', color: '#3D8BFD' }], levels: [0],
+      calc(bars, p) { const c = C(bars), a = rocOf(c, p.long), b = rocOf(c, p.short); return { cc: wma(a.map((v, i) => v + b[i]), p.wma) }; },
+    },
+    {
+      id: 'vortex', name: 'Vortex Indicator', short: 'VI', overlay: false, desc: 'Upward vs downward movement: VI+ above VI− means an uptrend',
+      inputs: [LEN(14)], plots: [{ key: 'plus', name: 'VI+', color: '#3D8BFD' }, { key: 'minus', name: 'VI−', color: '#F7525F' }], levels: [1],
+      calc(bars, p) {
+        const vp = bars.map((b, i) => (i ? Math.abs(b.h - bars[i - 1].l) : NaN)), vm = bars.map((b, i) => (i ? Math.abs(b.l - bars[i - 1].h) : NaN));
+        const tr = rsum(trueRange(bars).map((v, i) => (i ? v : NaN)), p.length), a = rsum(vp, p.length), b = rsum(vm, p.length);
+        return { plus: a.map((v, i) => v / tr[i]), minus: b.map((v, i) => v / tr[i]) };
+      },
+    },
+    {
+      id: 'tsi', name: 'True Strength Index', short: 'TSI', overlay: false, desc: 'Double-smoothed momentum, with a signal line',
+      inputs: [{ key: 'long', label: 'Long length', type: 'int', def: 25, min: 1 }, { key: 'short', label: 'Short length', type: 'int', def: 13, min: 1 }, { key: 'signal', label: 'Signal length', type: 'int', def: 13, min: 1 }],
+      plots: [{ key: 'tsi', name: 'TSI', color: '#3D8BFD' }, { key: 'sig', name: 'Signal', color: '#F7525F' }], levels: [0],
+      calc(bars, p) {
+        const d = change(C(bars)), a = ema(ema(d, p.long), p.short), b = ema(ema(d.map(Math.abs), p.long), p.short);
+        const tsi = a.map((v, i) => (b[i] ? (100 * v) / b[i] : NaN));
+        return { tsi, sig: ema(tsi, p.signal) };
+      },
+    },
+    {
+      id: 'pvt', name: 'Price Volume Trend', short: 'PVT', overlay: false, desc: 'Running total of volume times percentage price change',
+      inputs: [], plots: [{ key: 'pvt', name: 'PVT', color: '#3D8BFD', format: 'volume' }],
+      calc(bars) { let s = 0; return { pvt: bars.map((b, i) => (i ? (s += ((b.c - bars[i - 1].c) / bars[i - 1].c) * (b.v || 0)) : (s = 0))) }; },
+    },
+    {
+      id: 'bop', name: 'Balance of Power', short: 'BOP', overlay: false, desc: 'Who controls the bar: (close − open) / (high − low), smoothed',
+      inputs: [LEN(14)], plots: [{ key: 'bop', name: 'BOP', color: '#F7525F' }], levels: [0],
+      calc: (bars, p) => ({ bop: sma(bars.map((b) => (b.h === b.l ? 0 : (b.c - b.o) / (b.h - b.l))), p.length) }),
+    },
+    {
+      id: 'stdev', name: 'Standard Deviation', short: 'StdDev', overlay: false, desc: 'Standard deviation of the price over N bars',
+      inputs: [LEN(20), SRC], plots: [{ key: 'sd', name: 'StdDev', color: '#9C6ADE' }],
+      calc: (bars, p) => ({ sd: stdev(source(bars, p.source), p.length) }),
+    },
+    {
+      id: 'volosc', name: 'Volume Oscillator', short: 'Vol Osc', overlay: false, desc: 'Fast vs slow volume average, in %',
+      inputs: [{ key: 'fast', label: 'Fast length', type: 'int', def: 5, min: 1 }, { key: 'slow', label: 'Slow length', type: 'int', def: 10, min: 1 }],
+      plots: [{ key: 'vo', name: 'Vol Osc', color: '#3D8BFD' }], levels: [0],
+      calc(bars, p) { const v = V(bars), f = ema(v, p.fast), s = ema(v, p.slow); return { vo: f.map((x, i) => (s[i] ? (100 * (x - s[i])) / s[i] : NaN)) }; },
+    },
+    {
+      id: 'mass', name: 'Mass Index', short: 'Mass', overlay: false, desc: 'Range expansion: a bulge above 27 can come before a reversal',
+      inputs: [LEN(10)], plots: [{ key: 'mi', name: 'Mass Index', color: '#3D8BFD' }], levels: [27, 26.5],
+      calc(bars, p) { const r = bars.map((b) => b.h - b.l), e1 = ema(r, 9), e2 = ema(e1, 9); return { mi: rsum(e1.map((v, i) => v / e2[i]), p.length) }; },
+    },
+    {
+      id: 'cmo', name: 'Chande Momentum Oscillator', short: 'CMO', overlay: false, desc: 'Sum of gains minus sum of losses, −100 to 100',
+      inputs: [LEN(9), SRC], plots: [{ key: 'cmo', name: 'CMO', color: '#3D8BFD' }], levels: [50, 0, -50], range: [-100, 100],
+      calc(bars, p) {
+        const d = change(source(bars, p.source)), up = rsum(d.map((v) => (v > 0 ? v : v === v ? 0 : NaN)), p.length), dn = rsum(d.map((v) => (v < 0 ? -v : v === v ? 0 : NaN)), p.length);
+        return { cmo: up.map((u, i) => (u + dn[i] ? (100 * (u - dn[i])) / (u + dn[i]) : 0)) };
+      },
+    },
+  ];
+  // overlays go with the other overlays, oscillators at the end
+  for (const d of MORE) DEFS.push(d);
+
   const BY_ID = Object.fromEntries(DEFS.map((d) => [d.id, d]));
 
   function defaults(def) {

@@ -254,10 +254,18 @@ is meant for personal use.
   Figure** (see below)
 - **Custom indicators** with Candela Script, a small language with an editor, examples and reference
   (see below).
-- **Indicators (22)**: Volume, SMA, EMA, WMA, MA Ribbon, Bollinger Bands, Keltner, Donchian, VWAP,
-  Supertrend, Parabolic SAR, Ichimoku, RSI, MACD, Stochastic, Stochastic RSI, CCI, Williams %R,
-  MFI, ADX/DMI, ATR, OBV, ROC. Every input and color is editable; oscillators get their own
-  resizable, reorderable panes.
+- **Indicators (68)**, all free:
+  - *Moving averages and overlays*: SMA, EMA, WMA, Hull, DEMA, TEMA, VWMA, ALMA, SMMA, KAMA, Least Squares,
+    McGinley Dynamic, MA Ribbon, MA Cross, Envelopes, Bollinger Bands, Keltner, Donchian, VWAP, Supertrend,
+    Parabolic SAR, Ichimoku, Chandelier Exit, Williams Alligator, Williams Fractals, Zig Zag, Pivot Points
+    (Traditional, Fibonacci, Woodie, Camarilla; daily/weekly/monthly/yearly), Volume.
+  - *Oscillators*: RSI, Connors RSI, MACD, PPO, Stochastic, Stochastic RSI, CCI, Williams %R, MFI, ADX/DMI,
+    Aroon, Awesome and Accelerator Oscillators, Ultimate Oscillator, TRIX, KST, Fisher Transform, Momentum,
+    ROC, DPO, Coppock Curve, Vortex, True Strength Index, Chande Momentum, Balance of Power.
+  - *Volume and volatility*: OBV, Accumulation/Distribution, Chaikin Money Flow, Chaikin Oscillator, Elder
+    Force Index, Ease of Movement, Price Volume Trend, Volume Oscillator, ATR, Standard Deviation, Historical
+    Volatility, Bollinger %B and BandWidth, Choppiness Index, Mass Index.
+  Every input and color is editable; oscillators get their own resizable, reorderable panes.
 - **Drawing tools (75)**: lines, channels, pitchforks, Fibonacci and Gann tools, chart patterns, Elliott
   waves, cycles, long/short positions, forecasts, volume profiles, measurers, brushes, arrows and shapes;
   see *Drawing tools* below.

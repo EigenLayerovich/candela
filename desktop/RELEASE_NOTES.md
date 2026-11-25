@@ -1,4 +1,8 @@
-## New in 1.12.0
+## New in 1.13.0
+
+- **45 more indicators (68 in all)**: Hull, DEMA, TEMA, VWMA, ALMA, KAMA, McGinley and other moving averages, Pivot Points (Traditional/Fibonacci/Woodie/Camarilla), Zig Zag, Williams Alligator and Fractals, MA Cross, Chandelier Exit, Envelopes, Awesome/Accelerator Oscillators, Aroon, Ultimate Oscillator, TRIX, KST, Fisher Transform, PPO, Connors RSI, Coppock, Vortex, TSI, Chaikin Money Flow and Oscillator, Accumulation/Distribution, Force Index, Ease of Movement, Choppiness, Historical Volatility, Bollinger %B and BandWidth, Mass Index and more.
+
+## In 1.12.0
 
 - **Condition alerts**: price or any indicator line crossing, crossing up/down, greater or less than a value or another line (RSI crossing 30, EMA 20 crossing EMA 50, price above SMA 200…). The bell on every indicator's legend opens them.
 - **Alerts on drawn lines**: trend lines, rays, extended lines and parallel channels (Alert in the line's toolbar). Moving the line moves the alert.

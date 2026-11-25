@@ -49,7 +49,8 @@ const IND = globalThis.Indicators, CS = globalThis.CandelaScript, AL = globalThi
 const log = (...a) => console.log(new Date().toISOString().replace('T', ' ').slice(0, 19), ...a);
 
 // ---------------------------------------------------------------------- storage
-const DEFAULT_SETTINGS = { ntfy: { server: 'https://ntfy.sh', topic: '' }, telegram: { token: '', chatId: '' }, webhook: { url: '' }, twelveData: { key: '', perMin: 8, perDay: 800 } };
+const DEFAULT_SETTINGS = { ntfy: { server: 'https://ntfy.sh', topic: '' }, telegram: { token: '', chatId: '' }, webhook: { url: '' }, discord: { url: '' }, slack: { url: '' }, twelveData: { key: '', perMin: 8, perDay: 800 } };
+const CHANNELS = ['ntfy', 'telegram', 'discord', 'slack', 'webhook'];
 let db = { version: VERSION, alerts: [], scripts: [], settings: clone(DEFAULT_SETTINGS), events: [] };
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
@@ -81,19 +82,23 @@ function compileScript(sc) {
 }
 
 // ---------------------------------------------------------------------- notifications
-async function notifyAll(settings, message, { title = 'Candela alert', fetchImpl = fetch } = {}) {
+async function notifyAll(settings, message, { title = 'Candela alert', fetchImpl = fetch, channels = null } = {}) {
   const jobs = [];
   const opts = (o) => ({ ...o, signal: AbortSignal.timeout(10000) });
-  const { ntfy, telegram, webhook } = settings;
-  if (ntfy.topic) {
+  const want = (c) => !Array.isArray(channels) || channels.includes(c);
+  const { ntfy, telegram, webhook, discord = {}, slack = {} } = settings;
+  const postJson = (url, body) => fetchImpl(url, opts({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  if (discord.url && want('discord')) jobs.push(['discord', postJson(discord.url, { content: message })]);
+  if (slack.url && want('slack')) jobs.push(['slack', postJson(slack.url, { text: message })]);
+  if (ntfy.topic && want('ntfy')) {
     jobs.push(['ntfy', fetchImpl(`${(ntfy.server || 'https://ntfy.sh').replace(/\/+$/, '')}/${encodeURIComponent(ntfy.topic)}`,
       opts({ method: 'POST', body: message, headers: { Title: title, Tags: 'bell' } }))]);
   }
-  if (telegram.token && telegram.chatId) {
+  if (telegram.token && telegram.chatId && want('telegram')) {
     jobs.push(['telegram', fetchImpl(`https://api.telegram.org/bot${telegram.token}/sendMessage`,
       opts({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ chat_id: telegram.chatId, text: message }) }))]);
   }
-  if (webhook.url) {
+  if (webhook.url && want('webhook')) {
     const host = new URL(webhook.url).hostname;
     const body = /(^|\.)discord(app)?\.com$/.test(host) ? { content: message }
       : /(^|\.)slack\.com$/.test(host) ? { text: message }
@@ -107,7 +112,7 @@ async function notifyAll(settings, message, { title = 'Candela alert', fetchImpl
     return { channel, ok: r.value.ok, error: r.value.ok ? null : `HTTP ${r.value.status}` };
   });
 }
-const channelsConfigured = (s = db.settings) => [s.ntfy.topic && 'ntfy', s.telegram.token && s.telegram.chatId && 'telegram', s.webhook.url && 'webhook'].filter(Boolean);
+const channelsConfigured = (s = db.settings) => [s.ntfy.topic && 'ntfy', s.telegram.token && s.telegram.chatId && 'telegram', s.discord && s.discord.url && 'discord', s.slack && s.slack.url && 'slack', s.webhook.url && 'webhook'].filter(Boolean);
 
 // ---------------------------------------------------------------------- live updates to open tabs (SSE)
 const clients = new Set();
@@ -130,10 +135,28 @@ function fire(a, message) {
   events.emit('fired', ev);
   broadcastState();
   if (!a.active) syncFeeds();
-  notifyAll(db.settings, message).then((results) => {
+  notifyAll(db.settings, message, { channels: a.channels }).then((results) => {
     for (const r of results) if (!r.ok) log(`  ${r.channel} failed: ${r.error}`);
     if (!results.length) log('  (no notification channels set up: open the app → Alerts → server settings)');
   });
+}
+
+// an alert whose expiry date passed: switch it off and say so in the log
+function expire(a) {
+  const title = a.kind === 'rect' ? AL.rectTitle(a) : a.kind === 'line' ? AL.lineTitle(a) : a.kind === 'cond' ? AL.condTitle(a) : a.kind === 'marker' ? AL.markerTitle(a) : `${a.symbol} crossing ${AL.fmt(a.price)}`;
+  const message = AL.expiredText(a, title);
+  log(message);
+  const ev = { id: crypto.randomUUID(), alertId: a.id, message, t: Date.now(), expired: true };
+  db.events.unshift(ev);
+  db.events.length = Math.min(db.events.length, 100);
+  saveSoon();
+  broadcast('fired', ev);
+  broadcastState();
+  syncFeeds();
+}
+function sweepExpired() {
+  const now = Date.now();
+  for (const a of db.alerts) if (a.active && a.expires && AL.gate(a, now) === 'expired') expire(a);
 }
 
 function setPaused(a, reason) {
@@ -165,6 +188,7 @@ function syncFeeds() {
 }
 
 function evaluate(a, bars, prime) {
+  if (!prime) { const g = AL.gate(a); if (g === 'expired') return expire(a); if (g === 'off') return; }
   const cond = AL.isCond(a);
   const res = cond ? AL.evaluateCondition(a, bars, prime, resolveDef, IND.defaults) : AL.evaluateMarker(a, scriptDefs.get(a.scriptId), bars, prime, IND.defaults);
   if (res.type === 'pause') return setPaused(a, res.reason);
@@ -176,7 +200,11 @@ function evaluate(a, bars, prime) {
 const lastTime = {};
 function checkTick(a, sym, cur, now) {
   const prev = lastPrice[sym] ?? a.refPrice, prevT = lastTime[sym] ?? (a.refPrice != null ? a.created : null);
-  if (AL.isLine(a)) { const res = AL.lineCrossed(a, prev, prevT, cur, now, now); if (res) fire(a, AL.applyLineFire(a, cur, res, now)); }
+  const g = AL.gate(a, now);
+  if (g === 'expired') return expire(a);
+  if (g === 'off') return;
+  if (AL.isRect(a)) { const res = AL.rectCrossed(a, prev, cur, now); if (res) fire(a, AL.applyRectFire(a, cur, res, now)); }
+  else if (AL.isLine(a)) { const res = AL.lineCrossed(a, prev, prevT, cur, now, now); if (res) fire(a, AL.applyLineFire(a, cur, res, now)); }
   else if (AL.priceCrossed(a, prev, cur)) fire(a, AL.applyPriceFire(a, cur));
 }
 
@@ -312,8 +340,11 @@ async function pollStockPrices() {
       if (b.t < st.lastT) continue;
       for (const a of list) {
         if (a.symbol !== sym || !a.active) continue;
-        const prev = st.prev ?? a.refPrice;
-        if (AL.isLine(a)) { const res = AL.lineCrossed(a, prev, st.prevT ?? a.created, b.c, b.t + 60e3); if (res) fire(a, AL.applyLineFire(a, b.c, res)); }
+        const prev = st.prev ?? a.refPrice, g = AL.gate(a, b.t + 60e3);
+        if (g === 'expired') { expire(a); continue; }
+        if (g === 'off') continue;
+        if (AL.isRect(a)) { const res = AL.rectCrossed(a, prev, b.c, b.t + 60e3); if (res) fire(a, AL.applyRectFire(a, b.c, res)); }
+        else if (AL.isLine(a)) { const res = AL.lineCrossed(a, prev, st.prevT ?? a.created, b.c, b.t + 60e3); if (res) fire(a, AL.applyLineFire(a, b.c, res)); }
         // touched the level anywhere inside this minute?
         else if (AL.priceTouched(a, prev, b)) fire(a, AL.applyPriceFire(a, b.c));
       }
@@ -369,6 +400,14 @@ async function makeAlert(b) {
     if (known && !known.has(b.symbol)) throw new BadRequest(`${b.symbol} is not a Binance symbol`);
   }
   const base = { id, symbol: b.symbol, active: b.active !== false, created: num(b.created) || Date.now(), fires: num(b.fires) || 0 };
+  if (num(b.expires) > 0) base.expires = b.expires;
+  if (b.hours && typeof b.hours === 'object') {
+    const H = b.hours;
+    if (AL.toMin(H.from) == null || AL.toMin(H.to) == null || !str(H.tz, 64)) throw new BadRequest('Invalid active hours');
+    try { new Intl.DateTimeFormat('en-US', { timeZone: H.tz }); } catch (e) { throw new BadRequest('Unknown time zone'); }
+    base.hours = { from: H.from, to: H.to, days: H.days === 'weekdays' ? 'weekdays' : 'all', tz: H.tz };
+  }
+  if (Array.isArray(b.channels)) base.channels = b.channels.filter((c) => CHANNELS.includes(c));
   if (num(b.lastFired)) base.lastFired = b.lastFired;
   if (num(b.triggeredAt)) base.triggeredAt = b.triggeredAt;
   if (b.kind === 'cond') {
@@ -386,6 +425,14 @@ async function makeAlert(b) {
     return {
       ...base, kind: 'cond', tf: b.tf, left: side(b.left, false), right: side(b.right, true), op: b.op,
       when: b.when === 'bar' ? 'bar' : 'close', repeat: b.repeat === 'once' ? 'once' : 'every', ...(num(b.lastBarT) ? { lastBarT: b.lastBarT } : {}),
+    };
+  }
+  if (b.kind === 'rect') {
+    const bx = b.box;
+    if (!bx || !(num(bx.top) > 0) || !(num(bx.bot) > 0) || bx.top < bx.bot) throw new BadRequest('A zone alert needs a top and a bottom price');
+    return {
+      ...base, kind: 'rect', box: { top: bx.top, bot: bx.bot }, on: ['enter', 'exit'].includes(b.on) ? b.on : 'both', repeat: b.repeat === 'every' ? 'every' : 'once',
+      name: str(b.name, 60) ? b.name : 'zone', ...(str(b.drawingId, 40) ? { drawingId: b.drawingId } : {}), ...(num(b.refPrice) ? { refPrice: b.refPrice } : {}),
     };
   }
   if (b.kind === 'line') {
@@ -427,6 +474,8 @@ const publicSettings = () => ({
   ntfy: { ...db.settings.ntfy },
   telegram: { token: maskSecret(db.settings.telegram.token), chatId: db.settings.telegram.chatId },
   webhook: { url: db.settings.webhook.url ? db.settings.webhook.url.replace(/^(https?:\/\/[^/]+\/).+$/, '$1••••') : '' },
+  discord: { url: db.settings.discord.url ? db.settings.discord.url.replace(/^(https?:\/\/[^/]+\/).+$/, '$1••••') : '' },
+  slack: { url: db.settings.slack.url ? db.settings.slack.url.replace(/^(https?:\/\/[^/]+\/).+$/, '$1••••') : '' },
   twelveData: { key: maskSecret(db.settings.twelveData.key), perMin: db.settings.twelveData.perMin, perDay: db.settings.twelveData.perDay },
   configured: channelsConfigured(),
 });
@@ -589,6 +638,12 @@ async function handleApi(req, res, url) {
       MD.stockConfig(s.twelveData);
       syncFeeds();
     }
+    for (const [k, re, name] of [['discord', /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\S+$/, 'a Discord webhook URL (https://discord.com/api/webhooks/…)'], ['slack', /^https:\/\/hooks\.slack\.com\/\S+$/, 'a Slack webhook URL (https://hooks.slack.com/…)']]) {
+      if (!b[k] || !str(b[k].url, 500) || keep(b[k].url)) continue;
+      const u = b[k].url.trim();
+      if (u && !re.test(u)) throw new BadRequest(`That isn't ${name}`);
+      s[k].url = u;
+    }
     if (b.webhook && str(b.webhook.url, 500) && !keep(b.webhook.url)) {
       if (b.webhook.url && !/^https?:\/\/[^\s]+$/.test(b.webhook.url)) throw new BadRequest('The webhook must be an http(s) URL');
       s.webhook.url = b.webhook.url.trim();
@@ -650,7 +705,7 @@ function start(opts = {}) {
       MD.loadBStocks().catch(() => {}); // only for nicer names in notifications (NVDAB instead of NVDABUSDT)
       db.scripts.forEach(compileScript);
       syncFeeds();
-      timers.push(setInterval(pollPrices, 5000), setInterval(pollExchangePrices, 6000), setInterval(pollStockPrices, 30000),
+      timers.push(setInterval(pollPrices, 5000), setInterval(pollExchangePrices, 6000), setInterval(pollStockPrices, 30000), setInterval(sweepExpired, 30000),
         setInterval(() => { for (const res of clients) res.write(': keep-alive\n\n'); }, 25000));
       const port = server.address().port;
       if (!opts.quiet) {

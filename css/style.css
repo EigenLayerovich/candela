@@ -714,3 +714,37 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 kbd { display: inline-block; font: 600 11px/1 inherit; padding: 3px 6px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--panel-2); margin: 1px 0; }
 .saved-file { display: flex; gap: 6px; }
 .saved-file .btn { flex: 1; }
+
+/* ---- Strategy Tester: long/short, by day, Monte Carlo */
+.tt-perf td:not(:first-child), .tt-perf th:not(:first-child) { text-align: right; }
+.tt-perf tbody tr, .tt-periods tbody tr { cursor: default; }
+.tt-periods, .tt-mc { display: flex; gap: 18px; padding: 10px 14px; height: 100%; min-height: 0; }
+.tt-col { flex: 1; min-width: 0; overflow: auto; }
+.tt-periods .tt-col:first-child { flex: 0 0 360px; }
+.tt-barcell { width: 30%; }
+.tt-bar { display: inline-block; height: 8px; border-radius: 2px; vertical-align: middle; }
+.tt-bar.up { background: var(--up); }
+.tt-bar.down { background: var(--down); }
+.tt-mc p { margin: 0 0 10px; font-size: 12.5px; }
+.mc-chart { display: flex; flex-direction: column; }
+.mc-hist { flex: 1; min-height: 80px; display: flex; align-items: flex-end; gap: 2px; border-bottom: 1px solid var(--border); }
+.mc-bin { flex: 1; min-height: 1px; border-radius: 2px 2px 0 0; opacity: 0.75; }
+.mc-bin.up { background: var(--up); }
+.mc-bin.down { background: var(--down); }
+.mc-axis { display: flex; justify-content: space-between; font-size: 11px; padding-top: 2px; }
+
+/* ---- alert options, log */
+.al-opts { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+.al-opts summary { cursor: pointer; font-weight: 600; font-size: 12.5px; color: var(--muted); }
+.al-opts[open] summary { margin-bottom: 8px; }
+.al-hours { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.al-hours input[type=time] { width: 96px; }
+.al-chans { display: inline-flex; flex-wrap: wrap; gap: 10px; }
+.check-row.inline { display: inline-flex !important; gap: 5px; }
+.al-opt { display: block; font-size: 10.5px; color: var(--muted); }
+.side-acts { display: inline-flex; gap: 6px; align-items: center; }
+.log-pill { color: var(--muted); }
+.alert-log { max-height: 60vh; overflow: auto; display: flex; flex-direction: column; }
+.log-row { display: grid; grid-template-columns: 150px 1fr auto; gap: 10px; align-items: center; padding: 6px 2px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.log-row.expired .log-msg { color: var(--muted); }
+.log-t { font-variant-numeric: tabular-nums; font-size: 11.5px; }

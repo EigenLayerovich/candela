@@ -249,7 +249,7 @@
             break;
           case 'strategy':
             st = base;
-            st.opts = parseOptions({ capital: 1, size: 1, commission: 1, stop: 1, target: 1 });
+            st.opts = parseOptions({ capital: 1, size: 1, commission: 1, stop: 1, target: 1, slippage: 1 });
             break;
           case 'buy': case 'sell': case 'sellshort': case 'cover':
             st = { ...base, expr: parseExpr() };
@@ -629,7 +629,7 @@
           // defaults for the Strategy Tester (all changeable there)
           const o = st.opts, num = (k, what) => numOpt(o[k], what);
           strategy = strategy || { rules: [] };
-          Object.assign(strategy, { capital: num('capital', 'capital'), size: num('size', 'size'), commission: num('commission', 'commission'), stop: num('stop', 'stop'), target: num('target', 'target') });
+          Object.assign(strategy, { capital: num('capital', 'capital'), size: num('size', 'size'), commission: num('commission', 'commission'), stop: num('stop', 'stop'), target: num('target', 'target'), slippage: num('slippage', 'slippage') });
           break;
         }
         case 'buy': case 'sell': case 'sellshort': case 'cover':
@@ -757,7 +757,7 @@
         else if (WORD_OPS.includes(t.value)) cls = 'tk-op';
         else if (FUNCS[t.value]) cls = 'tk-fn';
         else if (BUILTIN_NAMES.includes(t.value)) cls = 'tk-bi';
-        else if (['color', 'width', 'style', 'position', 'min', 'max', 'step', 'histogram', 'line', 'dots', 'columns', 'above', 'below', 'capital', 'size', 'commission', 'stop', 'target'].includes(t.value)) cls = 'tk-opt';
+        else if (['color', 'width', 'style', 'position', 'min', 'max', 'step', 'histogram', 'line', 'dots', 'columns', 'above', 'below', 'capital', 'size', 'commission', 'stop', 'target', 'slippage'].includes(t.value)) cls = 'tk-opt';
       } else if (t.type === 'punct') cls = 'tk-op';
       if (t.type === 'color') {
         html += `<span class="tk-col"><i class="tk-swatch" style="background:${t.text.length === 4 || t.text.length === 7 || t.text.length === 5 || t.text.length === 9 ? t.text : 'transparent'}"></i>${esc(t.text)}</span>`;
@@ -783,7 +783,7 @@
     ['sell condition', 'Strategy: close the long position'],
     ['sellshort condition', 'Strategy: open a short position (or turn a long into a short)'],
     ['cover condition', 'Strategy: close the short position'],
-    ['strategy capital 10000 size 100 commission 0.1 stop 2 target 4', 'Strategy defaults: starting capital, % of equity per trade, commission %, stop loss %, take profit % (0 = off)'],
+    ['strategy capital 10000 size 100 commission 0.1 stop 2 target 4 slippage 0.05', 'Strategy defaults: starting capital, % of equity per trade, commission %, stop loss %, take profit % (0 = off), slippage % per fill'],
   ];
   const OPERATORS = [
     ['+ - * / % ^', 'Arithmetic, bar by bar'],

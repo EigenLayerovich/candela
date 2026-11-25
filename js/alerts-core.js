@@ -16,8 +16,9 @@
   const isMarker = (a) => a.kind === 'marker';
   const isCond = (a) => a.kind === 'cond';
   const isLine = (a) => a.kind === 'line';
+  const isRect = (a) => a.kind === 'rect';
   const isBar = (a) => isMarker(a) || isCond(a); // checked on candles
-  const isTick = (a) => !a.kind || isLine(a); // checked on every price update
+  const isTick = (a) => !a.kind || isLine(a) || isRect(a); // checked on every price update
   // Live exchange symbols only: simulated (DEMO…) and imported CSV data exist only in the browser.
   const serverEligible = (a) => !/^DEMO\d*$/.test(a.symbol) && !a.symbol.startsWith('CSV:');
 
@@ -116,6 +117,48 @@
   }
   const lineTitle = (a) => `${bare(a.symbol)} crossing${a.dir === 'up' ? ' up through' : a.dir === 'down' ? ' down through' : ''} ${a.name || 'line'}`;
 
+  // ---- price zones from a rectangle: box = { top, bot }, on = 'enter' | 'exit' | 'both'
+  function rectCrossed(a, prev, cur, now = Date.now()) {
+    if (prev == null || !a.box) return null;
+    if (a.repeat === 'every' && a.lastFired && now - a.lastFired < 60e3) return null;
+    const inside = (p) => p >= a.box.bot && p <= a.box.top, was = inside(prev), is = inside(cur);
+    if (!was && is && a.on !== 'exit') return { enter: true, from: prev > a.box.top ? 'above' : 'below' };
+    if (was && !is && a.on !== 'enter') return { enter: false, from: cur > a.box.top ? 'above' : 'below' };
+    return null;
+  }
+  function applyRectFire(a, cur, res, now = Date.now()) {
+    a.fires = (a.fires || 0) + 1;
+    a.lastFired = now;
+    if (a.repeat !== 'every') { a.active = false; a.triggeredAt = now; }
+    const zone = `${a.name || 'zone'} ${fmt(a.box.bot)}–${fmt(a.box.top)}`;
+    return res.enter ? `🔔 ${bare(a.symbol)} entered the ${zone} from ${res.from} (now ${fmt(cur)})` : `🔔 ${bare(a.symbol)} left the ${zone}, ${res.from} it (now ${fmt(cur)})`;
+  }
+  const rectTitle = (a) => `${bare(a.symbol)} ${a.on === 'enter' ? 'entering' : a.on === 'exit' ? 'leaving' : 'entering or leaving'} the ${a.name || 'zone'} ${fmt(a.box.bot)}–${fmt(a.box.top)}`;
+
+  // ---- when an alert may fire: an expiry date, and active hours ({ from: 'HH:MM', to: 'HH:MM', days: 'all' | 'weekdays', tz })
+  const fmtCache = {};
+  function localParts(now, tz) {
+    const f = fmtCache[tz] || (fmtCache[tz] = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', hour: '2-digit', minute: '2-digit', weekday: 'short' }));
+    const P = Object.fromEntries(f.formatToParts(new Date(now)).map((x) => [x.type, x.value]));
+    return { min: (+P.hour % 24) * 60 + +P.minute, wd: P.weekday };
+  }
+  const toMin = (s) => { const m = /^(\d{1,2}):(\d{2})$/.exec(s || ''); return m ? +m[1] * 60 + +m[2] : null; };
+  function inHours(h, now) {
+    let L;
+    try { L = localParts(now, h.tz || 'UTC'); } catch (e) { return true; }
+    if (h.days === 'weekdays' && (L.wd === 'Sat' || L.wd === 'Sun')) return false;
+    const f = toMin(h.from), t = toMin(h.to);
+    if (f == null || t == null || f === t) return true;
+    return f < t ? L.min >= f && L.min < t : L.min >= f || L.min < t; // overnight windows wrap
+  }
+  // 'ok', 'off' (outside its hours: not checked now) or 'expired' (turned off here)
+  function gate(a, now = Date.now()) {
+    if (a.expires && now >= a.expires) { if (a.active) { a.active = false; a.expiredAt = now; } return 'expired'; }
+    if (a.hours && !inHours(a.hours, now)) return 'off';
+    return 'ok';
+  }
+  const expiredText = (a, title) => `⏹ Alert expired: ${title}`;
+
   // ---- conditions: left / right = { src: 'price' } | { src: 'value', value } | { src: 'ind', type, params, key, label }
   const OPS = { cross: 'crossing', crossup: 'crossing up', crossdown: 'crossing down', gt: 'greater than', lt: 'less than' };
   const sideLabel = (s) => (s.src === 'price' ? 'Price' : s.src === 'value' ? (Number.isInteger(s.value) ? String(s.value) : fmt(s.value)) : s.label);
@@ -163,5 +206,6 @@
   root.CandelaAlerts = {
     isMarker, isCond, isLine, isBar, isTick, serverEligible, evaluateMarker, applyMarkerFire, markerTitle, priceCrossed, priceTouched, applyPriceFire, findMarker, TF_LABEL,
     lineAt, lineCrossed, applyLineFire, lineTitle, OPS, condTitle, evaluateCondition, applyCondFire, fmt,
+    isRect, rectCrossed, applyRectFire, rectTitle, gate, inHours, toMin, expiredText,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -1,4 +1,11 @@
-## New in 1.17.0
+## New in 1.18.0
+
+- **Alerts**: an expiry date, active hours (e.g. 09:00–17:00 Mon–Fri), zone alerts on rectangles (price enters or leaves), an **alert log** of everything that fired and why, and dedicated **Discord** and **Slack** channels on the alert server (each alert can pick its channels).
+- **Strategy Tester**: Long / short breakdown, profit by weekday and by day, **Monte Carlo** (1,000 resampled histories: range of returns and drawdowns), and **slippage**.
+
+To update the alert server too, restart `node server.js` (or the Windows app) after updating.
+
+## In 1.17.0
 
 - **Up to 16 charts** (4×2, 3×3, 4×3 and 4×4 grids) and **layout files**: export the current layout with its drawings and scripts, import it anywhere.
 - **Drawings**: show a drawing only on some timeframes (Visibility); weak or strong magnet; hold Shift for horizontal, vertical or 45° lines; Fibonacci level sets (classic, extensions, OTE) and your own levels.

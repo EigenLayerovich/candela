@@ -815,6 +815,7 @@
       if (FIB_TOOLS[d.type]) kids.push(h('button', { class: 'db-btn', title: 'Fibonacci levels', onclick: () => openFibLevels(this, d) }, 'Levels'));
       kids.push(h('button', { class: 'db-btn' + (d.vis && d.vis.length ? ' active' : ''), title: 'Show this drawing only on some timeframes', onclick: () => openVisibility(this, d) }, 'Visibility'));
       if (LINE_ALERT[d.type]) kids.push(h('button', { class: 'db-btn', title: 'Alert when the price crosses this line', onclick: () => openLineAlertDialog(this, d) }, 'Alert'));
+      if (d.type === 'rect') kids.push(h('button', { class: 'db-btn', title: 'Alert when the price enters or leaves this zone', onclick: () => openRectAlertDialog(this, d) }, 'Alert'));
       if (['hline', 'hray', 'crossline'].includes(d.type)) kids.push(h('button', { class: 'db-btn', title: 'Create a price alert at this line', onclick: () => addAlert(this.symbol, d.pts[0].p) }, 'Alert'));
       if (d.type === 'arrowup' || d.type === 'arrowdown') kids.push(h('button', { class: 'db-btn', onclick: async () => { const t = await askText('Label', d.text || '', 'Optional text'); if (t !== null && t !== undefined) { d.text = t; changed(); } } }, d.text ? 'Edit text' : 'Add text'));
       if (d.type === 'text') kids.push(h('button', { class: 'db-btn', onclick: async () => { const t = await askText('Text note', d.text); if (t) { d.text = t; changed(); } } }, 'Edit'));
@@ -2981,6 +2982,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (AL.isMarker(a)) return ` ${tfName(a.tf)} · ${a.scriptName}: ${a.markName}`;
     if (AL.isCond(a)) return ` ${tfName(a.tf)} · ${AL.condTitle(a).split(' · ').slice(1).join(' · ')}`;
     if (AL.isLine(a)) return ` crossing${dirWord(a)} ${a.name || 'line'}`;
+    if (AL.isRect(a)) return ` ${a.on === 'enter' ? 'entering' : a.on === 'exit' ? 'leaving' : 'entering or leaving'} ${a.box.bot.toFixed(decimalsFor(a.box.bot))}–${a.box.top.toFixed(decimalsFor(a.box.top))}`;
     return ` crossing${dirWord(a)} ${a.price.toFixed(decimalsFor(a.price))}`;
   }
 
@@ -2995,8 +2997,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     box.innerHTML = '';
     if (!state.alerts.length) { box.appendChild(h('div', { class: 'empty' }, 'No alerts. Right-click a chart, press Alt+A, or use the bell on a script with markers.')); return; }
     for (const a of [...state.alerts].reverse()) {
-      let stateText = a.active ? 'active' : 'triggered';
-      if (AL.isBar(a) || AL.isLine(a)) {
+      let stateText = a.active ? 'active' : a.expiredAt ? 'expired' : 'triggered';
+      if (AL.isBar(a) || AL.isLine(a) || AL.isRect(a)) {
         if (a.paused) stateText = 'paused';
         else if (a.active) stateText = a.fires ? `active · fired ${a.fires}×` : 'active';
       }
@@ -3013,7 +3015,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
         h('span', { class: 'al-dot' }),
         h('span', { class: 'al-text' }, h('b', {}, symLabel(a.symbol)),
           alertText(a),
-          a.paused ? h('small', { class: 'al-why' }, a.paused) : null),
+          a.paused ? h('small', { class: 'al-why' }, a.paused) : null,
+          optionsText(a) ? h('small', { class: 'al-opt' }, optionsText(a)) : null),
         h('span', { class: 'muted al-state' }, stateText),
         h('button', { class: 'wl-x', title: 'Delete alert', onclick: (e) => {
           e.stopPropagation();
@@ -3074,8 +3077,11 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     const form = h('div', { class: 'form' }, h('label', {}, h('span', {}, 'Alert'), h('b', {}, alertTitle(a))));
     const sel = (options, value) => { const s = h('select', {}, options.map(([v, l]) => h('option', { value: v }, l))); s.value = value; return s; };
     const row = (label, ctl) => { form.appendChild(h('label', {}, h('span', {}, label), ctl)); return ctl; };
-    let price, dir, op, value, when, repeat;
-    if (!a.kind || AL.isLine(a)) {
+    let price, dir, op, value, when, repeat, on;
+    if (AL.isRect(a)) {
+      on = row('When the price', sel([['enter', 'Enters the zone'], ['exit', 'Leaves the zone'], ['both', 'Enters or leaves the zone']], a.on || 'both'));
+      repeat = row('Repeat', sel([['once', 'Only once'], ['every', 'Every time (at most once a minute)']], a.repeat || 'once'));
+    } else if (!a.kind || AL.isLine(a)) {
       if (!a.kind) { price = row('Price', h('input', { type: 'number', step: 'any', value: a.price })); }
       dir = row('Direction', sel([['', 'Crossing either way'], ['up', 'Crossing up'], ['down', 'Crossing down']], a.dir || ''));
       if (AL.isLine(a)) repeat = row('Repeat', sel([['once', 'Only once'], ['every', 'Every time (at most once a minute)']], a.repeat || 'once'));
@@ -3087,7 +3093,9 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       when = row('Trigger', sel([['close', 'When the bar closes'], ['bar', 'As soon as it happens']], a.when || 'close'));
       repeat = row('Repeat', sel([['every', 'Every time (once per bar)'], ['once', 'Only once']], a.repeat || 'every'));
     }
-    if (!a.active) form.appendChild(h('p', { class: 'muted' }, 'This alert already fired; saving turns it on again.'));
+    const opts = alertOptions(a);
+    form.appendChild(opts.el);
+    if (!a.active) form.appendChild(h('p', { class: 'muted' }, a.expiredAt ? 'This alert expired; saving turns it on again (pick a new expiry).' : 'This alert already fired; saving turns it on again.'));
     const m = openModal('Edit alert', form, {
       footer: [h('button', { class: 'btn ghost danger-text', onclick: () => { m.close(); deleteAlert(a); } }, 'Remove'), h('span', { class: 'spacer' }),
         h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'),
@@ -3095,6 +3103,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
           if (price) { const v = +price.value; if (!isFinite(v) || v <= 0) { price.focus(); return; } a.price = v; }
           if (value) { const v = +value.value; if (!isFinite(v)) { value.focus(); return; } a.right = { src: 'value', value: v }; }
           if (dir) { if (dir.value) a.dir = dir.value; else delete a.dir; }
+          if (!opts.applyTo(a)) return;
+          if (on) a.on = on.value;
           if (op) a.op = op.value;
           if (when) a.when = when.value;
           if (repeat) a.repeat = repeat.value;
@@ -3117,9 +3127,9 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   }
 
-  function addAlert(symbol, price, dir) {
+  function addAlert(symbol, price, dir, opts = {}) {
     if (!isFinite(price)) return;
-    const a = { id: uid(), symbol, price: +price, active: true, created: Date.now() };
+    const a = { id: uid(), symbol, price: +price, active: true, created: Date.now(), ...opts };
     if (dir === 'up' || dir === 'down') a.dir = dir;
     if (lastPx[symbol] != null) a.refPrice = lastPx[symbol]; // lets the server spot a crossing before its first price check
     state.alerts.push(a);
@@ -3128,11 +3138,62 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     askNotificationPermission();
   }
 
+  // ---- alert options: expiry, active hours, which notification channels (server)
+  const myZone = () => (state.timeZone && state.timeZone.includes('/') ? state.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  function alertOptions(a = {}) {
+    const EXP = [['', 'Never'], ['1h', 'In 1 hour'], ['4h', 'In 4 hours'], ['1d', 'In 1 day'], ['1w', 'In 1 week'], ['1M', 'In 1 month'], ['date', 'On a date…']];
+    const exp = h('select', {}, EXP.map(([v, l]) => h('option', { value: v }, l)));
+    const pad = (n) => String(n).padStart(2, '0'), localInput = (t) => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+    const date = h('input', { type: 'datetime-local', hidden: true });
+    if (a.expires) { exp.value = 'date'; date.value = localInput(a.expires); date.hidden = false; }
+    exp.addEventListener('change', () => { date.hidden = exp.value !== 'date'; if (exp.value === 'date' && !date.value) date.value = localInput(Date.now() + 86400e3); });
+    const hOn = h('input', { type: 'checkbox', checked: !!a.hours });
+    const from = h('input', { type: 'time', value: a.hours ? a.hours.from : '09:00' }), to = h('input', { type: 'time', value: a.hours ? a.hours.to : '17:00' });
+    const days = h('select', {}, h('option', { value: 'all' }, 'every day'), h('option', { value: 'weekdays' }, 'Monday to Friday'));
+    days.value = a.hours ? a.hours.days : 'all';
+    const tz = a.hours ? a.hours.tz : myZone();
+    const syncHours = () => { for (const x of [from, to, days]) x.disabled = !hOn.checked; };
+    hOn.addEventListener('change', syncHours);
+    syncHours();
+    const chans = srv.connected ? srv.channels : [];
+    const chanBoxes = chans.map((c) => { const cb = h('input', { type: 'checkbox', checked: !a.channels || a.channels.includes(c) }); return [c, cb, h('label', { class: 'check-row inline' }, cb, h('span', {}, c[0].toUpperCase() + c.slice(1)))]; });
+    const summary = () => [a.expires ? 'expires' : '', a.hours ? 'active hours' : '', a.channels ? 'some channels' : ''].filter(Boolean).join(', ');
+    const el = h('details', { class: 'al-opts', open: !!(a.expires || a.hours || a.channels) },
+      h('summary', {}, 'Expiry, active hours', chans.length ? ', notifications' : '', summary() ? h('small', { class: 'muted' }, ` (${summary()})`) : null),
+      h('div', { class: 'form' },
+        h('label', {}, h('span', {}, 'Expires'), h('span', { class: 'tf-pick' }, exp, date)),
+        h('label', {}, h('span', {}, 'Active hours'), h('span', { class: 'al-hours' }, hOn, h('span', {}, 'only'), from, h('span', {}, 'to'), to, days)),
+        h('small', { class: 'muted' }, `Times in ${tz}. Outside them the alert waits and doesn't fire.`),
+        chans.length ? h('label', {}, h('span', {}, 'Notify via'), h('span', { class: 'al-chans' }, chanBoxes.map((x) => x[2]))) : null));
+    const read = () => {
+      const o = {};
+      if (exp.value === 'date') { const t = new Date(date.value).getTime(); if (!(t > Date.now())) { toast('Pick an expiry date in the future', 'warn', 2500); date.focus(); return null; } o.expires = t; }
+      else if (exp.value) o.expires = Date.now() + { '1h': 3600e3, '4h': 4 * 3600e3, '1d': 86400e3, '1w': 7 * 86400e3, '1M': 30 * 86400e3 }[exp.value];
+      if (hOn.checked) {
+        if (!from.value || !to.value || from.value === to.value) { toast('Pick a start and an end time for the active hours', 'warn', 2500); return null; }
+        o.hours = { from: from.value, to: to.value, days: days.value, tz };
+      }
+      if (chanBoxes.length && chanBoxes.some(([, cb]) => !cb.checked)) o.channels = chanBoxes.filter(([, cb]) => cb.checked).map(([c]) => c);
+      return o;
+    };
+    // for editing: set or clear the options on an alert
+    const applyTo = (al) => {
+      const o = read();
+      if (!o) return false;
+      for (const k of ['expires', 'hours', 'channels']) { if (o[k] !== undefined) al[k] = o[k]; else delete al[k]; }
+      delete al.expiredAt;
+      return true;
+    };
+    return { el, read, applyTo };
+  }
+  const fmtWhen = (t) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const optionsText = (a) => [a.expires ? (a.active ? `until ${fmtWhen(a.expires)}` : a.expiredAt ? 'expired' : '') : '', a.hours ? `${a.hours.from}–${a.hours.to}${a.hours.days === 'weekdays' ? ' Mon–Fri' : ''}` : '', a.channels ? `via ${a.channels.join(', ') || 'no channel'}` : ''].filter(Boolean).join(' · ');
+
   // markers available on a chart: [{ ind, pl }] for every script indicator plot drawn as a marker
   const chartMarkers = (chart) => chart.indicators.filter((i) => i.def.script).flatMap((ind) => ind.def.plots.filter((pl) => pl.style === 'mark').map((pl) => ({ ind, pl })));
 
-  function addMarkerAlert(slot, ind, pl, when, repeat) {
-    const a = {
+  function addMarkerAlert(slot, ind, pl, when, repeat, opts = {}) {
+    const a = { ...opts,
       id: uid(), kind: 'marker', symbol: slot.symbol, tf: slot.tf,
       scriptId: ind.def.scriptId, scriptName: ind.def.name, markKey: pl.key, markName: pl.name,
       params: { ...ind.params }, when, repeat, active: true, fires: 0, created: Date.now(),
@@ -3146,8 +3207,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   }
 
   // a condition alert: price or an indicator line against a value or another line, checked on candles
-  function addCondAlert(slot, left, op, right, when, repeat) {
-    const a = { id: uid(), kind: 'cond', symbol: slot.symbol, tf: slot.tf, left, op, right, when, repeat, active: true, fires: 0, created: Date.now() };
+  function addCondAlert(slot, left, op, right, when, repeat, opts = {}) {
+    const a = { ...opts, id: uid(), kind: 'cond', symbol: slot.symbol, tf: slot.tf, left, op, right, when, repeat, active: true, fires: 0, created: Date.now() };
     state.alerts.push(a);
     if (slot.chart.raw.length) evaluateMarkerAlert(a, slot.chart.raw, true); // a condition already true on this bar doesn't fire for it
     registerAlert(a);
@@ -3233,16 +3294,19 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       note.textContent += srv.connected && !isDemo(slot.symbol) && !csv ? ' Runs on the alert server, even with the browser closed.' : ' Alerts run while this page is open.';
       createBtn.disabled = csv && !simplePrice;
     };
+    const opts = alertOptions();
     const body = h('div', { class: 'form' },
       h('label', {}, h('span', {}, 'Symbol'), h('b', {}, `${bare(slot.symbol)}${csv ? '' : ' · ' + tfName(slot.tf)}`)),
-      h('label', {}, h('span', {}, 'Condition'), left), opRow, rightRow, barRows, note);
+      h('label', {}, h('span', {}, 'Condition'), left), opRow, rightRow, barRows, note, opts.el);
     const create = () => {
       const when = body.querySelector('input[name="alertWhen"]:checked').value, repeat = body.querySelector('input[name="alertRepeat"]:checked').value;
-      if (left.value.startsWith('m:')) { const mk = markers[+left.value.slice(2)]; addMarkerAlert(slot, mk.ind, mk.pl, when, repeat); m.close(); return; }
+      const o = opts.read();
+      if (!o) return;
+      if (left.value.startsWith('m:')) { const mk = markers[+left.value.slice(2)]; addMarkerAlert(slot, mk.ind, mk.pl, when, repeat, o); m.close(); return; }
       const src = leftSrc(), rightSpec = right.value === 'value' ? { src: 'value', value: +valueIn.value } : sources.find((x) => 's:' + x.id === right.value).spec;
       if (rightSpec.src === 'value' && !isFinite(rightSpec.value)) { valueIn.focus(); return; }
-      if (src.id === 'price' && rightSpec.src === 'value' && op.value.startsWith('cross')) addAlert(slot.symbol, rightSpec.value, op.value === 'crossup' ? 'up' : op.value === 'crossdown' ? 'down' : null);
-      else addCondAlert(slot, src.spec, op.value, rightSpec, when, repeat);
+      if (src.id === 'price' && rightSpec.src === 'value' && op.value.startsWith('cross')) addAlert(slot.symbol, rightSpec.value, op.value === 'crossup' ? 'up' : op.value === 'crossdown' ? 'down' : null, o);
+      else addCondAlert(slot, src.spec, op.value, rightSpec, when, repeat, o);
       m.close();
     };
     const createBtn = h('button', { class: 'btn primary', onclick: create }, 'Create');
@@ -3265,12 +3329,38 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     const name = LINE_ALERT[d.type][1];
     const dir = h('select', {}, h('option', { value: '' }, `Crosses the ${name}`), h('option', { value: 'up' }, `Crosses up through the ${name}`), h('option', { value: 'down' }, `Crosses down through the ${name}`));
     const repeat = h('select', {}, h('option', { value: 'once' }, 'Only once'), h('option', { value: 'every' }, 'Every time (at most once a minute)'));
+    const opts = alertOptions();
     const m = openModal('Alert on this line', h('div', { class: 'form' },
       h('label', {}, h('span', {}, 'When the price'), dir), h('label', {}, h('span', {}, 'Repeat'), repeat),
-      h('p', { class: 'muted' }, `Checked on every price update${d.type === 'ray' || d.type === 'extended' ? ', along the line as it continues to the right' : ' between the two ends of the line'}. Moving the line later moves the alert with it.`)), {
+      h('p', { class: 'muted' }, `Checked on every price update${d.type === 'ray' || d.type === 'extended' ? ', along the line as it continues to the right' : ' between the two ends of the line'}. Moving the line later moves the alert with it.`), opts.el), {
       footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: () => {
-        const a = { id: uid(), kind: 'line', symbol: slot.symbol, lines: linesOfDrawing(d), name, drawingId: d.id, repeat: repeat.value, active: true, fires: 0, created: Date.now() };
+        const o = opts.read();
+        if (!o) return;
+        const a = { ...o, id: uid(), kind: 'line', symbol: slot.symbol, lines: linesOfDrawing(d), name, drawingId: d.id, repeat: repeat.value, active: true, fires: 0, created: Date.now() };
         if (dir.value) a.dir = dir.value;
+        if (lastPx[slot.symbol] != null) a.refPrice = lastPx[slot.symbol];
+        state.alerts.push(a);
+        registerAlert(a);
+        toast(`Alert set: ${alertTitle(a)}`, 'info');
+        askNotificationPermission();
+        m.close();
+      } }, 'Create')],
+    });
+  }
+  // ---- zone alerts on a rectangle: the price entering and/or leaving its price range
+  const boxOf = (d) => ({ top: Math.max(d.pts[0].p, d.pts[1].p), bot: Math.min(d.pts[0].p, d.pts[1].p) });
+  function openRectAlertDialog(slot, d) {
+    const on = h('select', {}, h('option', { value: 'enter' }, 'Enters the zone'), h('option', { value: 'exit' }, 'Leaves the zone'), h('option', { value: 'both' }, 'Enters or leaves the zone'));
+    const repeat = h('select', {}, h('option', { value: 'once' }, 'Only once'), h('option', { value: 'every' }, 'Every time (at most once a minute)'));
+    const box = boxOf(d), c = slot.chart, opts = alertOptions();
+    const m = openModal('Alert on this zone', h('div', { class: 'form' },
+      h('label', {}, h('span', {}, 'Zone'), h('b', {}, `${c.fmtPrice(box.bot)} – ${c.fmtPrice(box.top)}`)),
+      h('label', {}, h('span', {}, 'When the price'), on), h('label', {}, h('span', {}, 'Repeat'), repeat),
+      h('p', { class: 'muted' }, 'Checked on every price update, on the rectangle\'s price range (its dates don\'t matter). Moving or resizing the rectangle later moves the alert with it.'), opts.el), {
+      footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: () => {
+        const o = opts.read();
+        if (!o) return;
+        const a = { ...o, id: uid(), kind: 'rect', symbol: slot.symbol, box, on: on.value, name: 'zone', drawingId: d.id, repeat: repeat.value, active: true, fires: 0, created: Date.now() };
         if (lastPx[slot.symbol] != null) a.refPrice = lastPx[slot.symbol];
         state.alerts.push(a);
         registerAlert(a);
@@ -3283,6 +3373,15 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   // a line with an alert was moved: move the alert too
   function updateLineAlerts(symbol, drawings) {
     for (const a of state.alerts) {
+      if (AL.isRect(a) && a.symbol === symbol && a.drawingId && a.active) {
+        const d = drawings.find((x) => x.id === a.drawingId);
+        if (!d || d.type !== 'rect' || d.pts.length < 2) continue;
+        const box = boxOf(d);
+        if (box.top === a.box.top && box.bot === a.box.bot) continue;
+        a.box = box;
+        resyncAlert(a);
+        continue;
+      }
       if (!AL.isLine(a) || a.symbol !== symbol || !a.drawingId || !a.active) continue;
       const d = drawings.find((x) => x.id === a.drawingId);
       if (!d || !LINE_ALERT[d.type]) continue;
@@ -3302,9 +3401,54 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (prev == null || prev === price) return;
     for (const a of state.alerts) {
       if (!AL.isTick(a) || !a.active || a.symbol !== sym || servedByServer(a)) continue;
-      if (AL.isLine(a)) { const res = AL.lineCrossed(a, prev, prevT, price, now, now); if (res) fireAlert(a, price, res); }
+      const g = AL.gate(a, now);
+      if (g === 'expired') { alertExpired(a); continue; }
+      if (g === 'off') continue;
+      if (AL.isRect(a)) { const res = AL.rectCrossed(a, prev, price, now); if (res) fireAlert(a, price, null, res); }
+      else if (AL.isLine(a)) { const res = AL.lineCrossed(a, prev, prevT, price, now, now); if (res) fireAlert(a, price, res); }
       else if (AL.priceCrossed(a, prev, price)) fireAlert(a, price);
     }
+  }
+
+  // ---- alert log: every fire (with why) and every expiry, from this tab and from the server
+  if (!Array.isArray(state.alertLog)) state.alertLog = [];
+  function logAlert(msg, a, key, t = Date.now()) {
+    key = key || uid();
+    if (state.alertLog.some((x) => x.key === key)) return;
+    state.alertLog.unshift({ key, t, msg, id: a ? a.id : null, symbol: a ? a.symbol : null });
+    state.alertLog.sort((x, y) => y.t - x.t);
+    if (state.alertLog.length > 300) state.alertLog.length = 300;
+    save();
+    if (document.getElementById('alertLogBox')) renderAlertLog();
+  }
+  function alertExpired(a) {
+    const msg = AL.expiredText(a, alertTitle(a));
+    logAlert(msg, a);
+    if (a.server) a.dirty = true;
+    save();
+    refreshAlerts();
+    syncMarkerFeeds();
+    toast(msg, 'info', 5000);
+  }
+  // expiry dates pass without a price update too
+  setInterval(() => { const now = Date.now(); for (const a of state.alerts) if (a.active && a.expires && !servedByServer(a) && AL.gate(a, now) === 'expired') alertExpired(a); }, 30000);
+  function renderAlertLog() {
+    const box = document.getElementById('alertLogBox');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!state.alertLog.length) { box.appendChild(h('p', { class: 'muted' }, 'Nothing has fired yet. Every alert that fires (here or on the alert server) is listed here with what happened.')); return; }
+    for (const e of state.alertLog) {
+      const a = state.alerts.find((x) => x.id === e.id);
+      box.appendChild(h('div', { class: 'log-row' + (/^⏹/.test(e.msg) ? ' expired' : '') },
+        h('span', { class: 'muted log-t' }, new Date(e.t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })),
+        h('span', { class: 'log-msg' }, e.msg.replace(/^🔔 /, '')),
+        e.symbol ? h('button', { class: 'btn ghost small', title: 'Open the chart', onclick: () => { closeModal(); if (a) showAlertOnChart(a); else openSymbol(e.symbol); } }, 'Chart') : null));
+    }
+  }
+  function openAlertLog() {
+    const m = openModal('Alert log', h('div', { id: 'alertLogBox', class: 'alert-log' }), { wide: true,
+      footer: [h('button', { class: 'btn ghost danger-text', onclick: () => { state.alertLog = []; save(); renderAlertLog(); } }, 'Clear log'), h('span', { class: 'spacer' }), h('button', { class: 'btn primary', onclick: () => m.close() }, 'Close')] });
+    renderAlertLog();
   }
 
   // fromServer: the alert server already announced it (in the desktop app, as a Windows notification)
@@ -3315,8 +3459,9 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     try { if ('Notification' in window && Notification.permission === 'granted') new Notification('Candela alert', { body: msg }); } catch (e) { /* ignore */ }
   }
 
-  function fireAlert(a, price, lineRes) {
-    const msg = lineRes ? AL.applyLineFire(a, price, lineRes) : AL.applyPriceFire(a, price);
+  function fireAlert(a, price, lineRes, rectRes) {
+    const msg = rectRes ? AL.applyRectFire(a, price, rectRes) : lineRes ? AL.applyLineFire(a, price, lineRes) : AL.applyPriceFire(a, price);
+    logAlert(msg, a);
     if (a.server) a.dirty = true; // fired here while the server was away: tell it later
     save();
     refreshAlerts();
@@ -3983,7 +4128,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       grip.addEventListener('pointermove', move);
       grip.addEventListener('pointerup', up);
     });
-    const tabs = h('div', { class: 'tt-tabs', role: 'tablist' }, [['overview', 'Overview'], ['trades', 'List of trades'], ['props', 'Properties']].map(([k, label]) =>
+    const tabs = h('div', { class: 'tt-tabs', role: 'tablist' }, [['overview', 'Overview'], ['perf', 'Long / short'], ['periods', 'By day'], ['mc', 'Monte Carlo'], ['trades', 'List of trades'], ['props', 'Properties']].map(([k, label]) =>
       h('button', { class: 'tt-tab' + (state.tester.tab === k ? ' on' : ''), role: 'tab', onclick: () => { state.tester.tab = k; save(); renderTester(); } }, label)));
     const pick = strats.length > 1 ? h('select', { class: 'tt-pick', onchange: (e) => { tester.scriptId = e.target.value; runTester(); } },
       strats.map((i) => h('option', { value: i.def.scriptId, selected: i.def.scriptId === tester.scriptId }, i.def.name))) : null;
@@ -4019,6 +4164,55 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
           cell('Open position', r.openTrade ? `${r.openTrade.dir > 0 ? 'Long' : 'Short'} ${fmtMoney(r.openTrade.pnl)}` : 'None', r.openTrade ? pctTxt(r.openTrade.pnlPct) : '', r.openTrade ? cls(r.openTrade.pnl) : '')),
         h('div', { class: 'tt-curve' }, h('canvas', { id: 'ttCanvas' }), h('div', { class: 'tt-legend muted' }, h('i', { class: 'sw eq' }), 'Equity ', h('i', { class: 'sw bh' }), 'Buy & hold'))));
       requestAnimationFrame(drawEquity);
+    } else if (state.tester.tab === 'perf') {
+      // the same numbers for all trades, long trades only and short trades only
+      const S = BT.bySide(r.trades), cols = [['all', 'All trades'], ['long', 'Long'], ['short', 'Short']];
+      const pf = (x) => (x.trades ? (isFinite(x.profitFactor) ? x.profitFactor.toFixed(2) : '∞') : '–');
+      const rows = [
+        ['Net profit', (x) => fmtMoney(x.net), (x) => cls(x.net)], ['Gross profit', (x) => fmtMoney(x.grossProfit)], ['Gross loss', (x) => fmtMoney(-x.grossLoss)],
+        ['Closed trades', (x) => String(x.trades)], ['Won / lost', (x) => `${x.wins} / ${x.losses}`], ['Percent profitable', (x) => (x.trades ? x.winRate.toFixed(1) + '%' : '–')],
+        ['Profit factor', pf], ['Average trade', (x) => fmtMoney(x.avgTrade), (x) => cls(x.avgTrade)], ['Average win', (x) => fmtMoney(x.avgWin)], ['Average loss', (x) => fmtMoney(x.avgLoss)],
+        ['Ratio avg win / avg loss', (x) => (x.avgLoss ? (x.avgWin / -x.avgLoss).toFixed(2) : '–')], ['Largest win', (x) => fmtMoney(x.largestWin)], ['Largest loss', (x) => fmtMoney(x.largestLoss)],
+        ['Average candles in trade', (x) => x.avgBars.toFixed(1)],
+      ];
+      body.append(h('div', { class: 'tt-table-wrap' }, h('table', { class: 'tt-table tt-perf' },
+        h('thead', {}, h('tr', {}, h('th', {}, ''), cols.map(([, l]) => h('th', {}, l)))),
+        h('tbody', {}, rows.map(([label, f, k]) => h('tr', {}, h('td', { class: 'muted' }, label), cols.map(([key]) => h('td', { class: k ? k(S[key]) : '' }, f(S[key])))))))));
+    } else if (state.tester.tab === 'periods') {
+      const P = BT.periods(r.trades, CC.tzOffset), WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const bar = (v, mx) => h('span', { class: 'tt-bar ' + (v >= 0 ? 'up' : 'down'), style: `width:${mx ? Math.max(2, (Math.abs(v) / mx) * 100) : 0}%` });
+      const wmx = Math.max(...P.weekdays.map((w) => Math.abs(w.net)), 0), dmx = Math.max(...P.daily.map((d) => Math.abs(d.net)), 0);
+      const best = P.daily.reduce((a, d) => (!a || d.net > a.net ? d : a), null), worst = P.daily.reduce((a, d) => (!a || d.net < a.net ? d : a), null);
+      const green = P.daily.filter((d) => d.net > 0).length;
+      const dayName = (d) => new Date(d.day).toLocaleDateString(undefined, { timeZone: 'UTC', weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+      body.append(h('div', { class: 'tt-periods' },
+        h('div', { class: 'tt-col' }, h('div', { class: 'menu-label' }, 'By weekday (when trades closed)'), h('table', { class: 'tt-table' },
+          h('thead', {}, h('tr', {}, ['Day', 'Trades', 'Win rate', 'Net profit', ''].map((x) => h('th', {}, x)))),
+          h('tbody', {}, P.weekdays.map((w, i) => h('tr', {}, h('td', {}, WD[i]), h('td', {}, String(w.trades)), h('td', {}, w.trades ? ((100 * w.wins) / w.trades).toFixed(0) + '%' : '–'),
+            h('td', { class: cls(w.net) }, w.trades ? fmtMoney(w.net) : '–'), h('td', { class: 'tt-barcell' }, w.trades ? bar(w.net, wmx) : null)))))),
+        h('div', { class: 'tt-col' }, h('div', { class: 'menu-label' }, `By day: ${P.daily.length} trading days, ${green} profitable` + (best && P.daily.length > 1 ? ` · best ${fmtMoney(best.net)}, worst ${fmtMoney(worst.net)}` : '')),
+          P.daily.length ? h('table', { class: 'tt-table' },
+            h('thead', {}, h('tr', {}, ['Date', 'Trades', 'Win rate', 'Net profit', ''].map((x) => h('th', {}, x)))),
+            h('tbody', {}, P.daily.slice().reverse().map((d) => h('tr', {}, h('td', {}, dayName(d)), h('td', {}, String(d.trades)), h('td', {}, ((100 * d.wins) / d.trades).toFixed(0) + '%'),
+              h('td', { class: cls(d.net) }, fmtMoney(d.net)), h('td', { class: 'tt-barcell' }, bar(d.net, dmx)))))) : h('p', { class: 'muted' }, 'No closed trades.'))));
+    } else if (state.tester.tab === 'mc') {
+      const mc = tester.mc && tester.mc.result === r ? tester.mc.out : (tester.mc = { result: r, out: BT.monteCarlo(r.trades, r.options.capital, 1000) }).out;
+      if (!mc) { body.append(h('div', { class: 'tt-empty muted' }, 'Monte Carlo needs at least two closed trades.')); return; }
+      const pc = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}%`;
+      const row = (label, o, neg) => h('tr', {}, h('td', { class: 'muted' }, label), ['p5', 'p25', 'p50', 'p75', 'p95'].map((k) => h('td', { class: neg ? 'down' : cls(o[k]) }, neg ? '−' + o[k].toFixed(1) + '%' : pc(o[k]))));
+      // histogram of the final returns
+      const lo = Math.min(...mc.finals), hi = Math.max(...mc.finals), nb = 24, w = (hi - lo) / nb || 1, bins = new Array(nb).fill(0);
+      for (const v of mc.finals) bins[Math.min(nb - 1, Math.floor((v - lo) / w))]++;
+      const bmx = Math.max(...bins);
+      const hist = h('div', { class: 'mc-hist', title: 'How often each end result came up' }, bins.map((c, i) => h('span', { class: 'mc-bin ' + (lo + (i + 0.5) * w >= 0 ? 'up' : 'down'), style: `height:${(c / bmx) * 100}%`, title: `${pc(lo + i * w)} to ${pc(lo + (i + 1) * w)}: ${c} runs` })));
+      body.append(h('div', { class: 'tt-mc' },
+        h('div', { class: 'tt-col' },
+          h('p', { class: 'muted' }, `${mc.runs} made-up histories of ${r.trades.length} trades each, drawn at random from the backtest's ${r.trades.length} closed trades (some repeat, some are left out). Each trade keeps its result as a percentage of the equity it started with. The spread shows how much of the backtest could be luck.`),
+          h('table', { class: 'tt-table tt-perf' },
+            h('thead', {}, h('tr', {}, ['', 'Worst 5%', '25%', 'Median', '75%', 'Best 5%'].map((x) => h('th', {}, x)))),
+            h('tbody', {}, row('Total return', mc.returns), row('Max drawdown', { p5: mc.drawdowns.p95, p25: mc.drawdowns.p75, p50: mc.drawdowns.p50, p75: mc.drawdowns.p25, p95: mc.drawdowns.p5 }, true))),
+          h('p', {}, h('b', {}, `${mc.lossChance.toFixed(1)}%`), ` of the histories ended with a loss · the backtest's own drawdown was ${st.maxDrawdownPct.toFixed(1)}%`)),
+        h('div', { class: 'tt-col mc-chart' }, h('div', { class: 'menu-label' }, 'End result of each run'), hist, h('div', { class: 'mc-axis muted' }, h('span', {}, pc(lo)), h('span', {}, pc(hi))))));
     } else if (state.tester.tab === 'trades') {
       const all = [...r.trades, ...(r.openTrade ? [r.openTrade] : [])];
       let cum = 0;
@@ -4052,7 +4246,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
         field('commission', 'Commission', '% per order', 'Paid when entering and when leaving a trade'),
         field('stop', 'Stop loss', '% from entry', '0 or empty: no stop loss'),
         field('target', 'Take profit', '% from entry', '0 or empty: no take profit'),
-        h('p', { class: 'muted' }, 'Empty fields use the script\'s "strategy" line (shown greyed). Orders fill at the next candle\'s open; if a candle touches both the stop and the target, the stop counts.'),
+        field('slippage', 'Slippage', '% per fill', 'Each fill is this much worse: buys higher, sells lower'),
+        h('p', { class: 'muted' }, 'Empty fields use the script\'s "strategy" line (shown greyed). Orders fill at the next candle\'s open (plus slippage); if a candle touches both the stop and the target, the stop counts.'),
         h('div', {}, h('button', { class: 'btn ghost', onclick: () => { delete slot.cfg.strategyProps[tester.scriptId]; save(); runTester(); } }, 'Use script defaults'))));
     }
   }
@@ -4176,6 +4371,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     es.addEventListener('fired', (e) => {
       const ev = JSON.parse(e.data);
       srv.events.unshift(ev);
+      logAlert(ev.message, state.alerts.find((x) => x.id === ev.alertId) || null, ev.id, ev.t);
+      if (ev.expired) { toast(ev.message, 'info', 5000); return; }
       notify(ev.message, { fromServer: true });
     });
     es.onerror = () => { if (srv.connected) onServerLost(); };
@@ -4227,6 +4424,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
 
   function applyServerState(d) {
     srv.channels = d.channels || [];
+    for (const ev of d.events || []) logAlert(ev.message, state.alerts.find((x) => x.id === ev.alertId) || null, ev.id, ev.t); // fired while this tab was closed
     srv.events = d.events || srv.events;
     const ids = new Set(d.alerts.map((a) => a.id));
     // keep browser-only alerts (simulated/CSV data, or not accepted by the server), replace the rest
@@ -4353,13 +4551,17 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       const [ntfySrvRow, ntfyServer] = field('ntfyServer', 'Server', st.ntfy.server, 'https://ntfy.sh');
       const [tgTokRow, tgToken] = field('tgToken', 'Bot token', st.telegram.token, '123456:ABC…', 'password');
       const [tgChatRow, tgChat] = field('tgChat', 'Chat ID', st.telegram.chatId, 'e.g. 123456789');
-      const [whRow, whUrl] = field('whUrl', 'URL', st.webhook.url, 'https://discord.com/api/webhooks/…');
+      const [whRow, whUrl] = field('whUrl', 'URL', st.webhook.url, 'https://example.com/hook');
+      const [dcRow, dcUrl] = field('dcUrl', 'Webhook URL', (st.discord || {}).url || '', 'https://discord.com/api/webhooks/…');
+      const [slRow, slUrl] = field('slUrl', 'Webhook URL', (st.slack || {}).url || '', 'https://hooks.slack.com/services/…');
       const section = (title, hint, ...rows) => h('fieldset', { class: 'srv-sec' }, h('legend', {}, title), h('p', { class: 'muted' }, hint), ...rows);
       body.append(
         h('p', { class: 'srv-ok' }, '● Connected. Alerts on live symbols run on the server even with the browser closed.'),
         section('Phone push: ntfy', 'Free, no account. Install the ntfy app (Android, iPhone) or open ntfy.sh, and subscribe to the same topic. Anyone who knows the topic name can read it, so use something hard to guess.', ntfyRow, ntfySrvRow),
         section('Telegram', 'Create a bot with @BotFather to get its token, send your bot a message, then get your chat ID (e.g. from @userinfobot).', tgTokRow, tgChatRow),
-        section('Webhook', 'Discord or Slack incoming-webhook URL, or any URL that accepts a JSON POST.', whRow),
+        section('Discord', 'In a Discord channel: Edit channel → Integrations → Webhooks → New webhook → Copy webhook URL.', dcRow),
+        section('Slack', 'Create a Slack app with an incoming webhook for a channel (api.slack.com/messaging/webhooks) and paste its URL.', slRow),
+        section('Other webhook', 'Any URL that accepts a JSON POST ({ title, message, source, time }). Discord and Slack URLs work here too.', whRow),
         resultBox,
         h('div', { class: 'menu-label' }, 'Recently fired'), evBox);
       const renderEvents = () => {
@@ -4368,7 +4570,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
         for (const ev of srv.events.slice(0, 12)) evBox.appendChild(h('div', { class: 'srv-ev' }, h('span', { class: 'muted' }, new Date(ev.t).toLocaleString()), ev.message.replace(/^🔔 /, '')));
       };
       renderEvents();
-      const payload = () => ({ ntfy: { topic: ntfyTopic.value.trim(), server: ntfyServer.value.trim() || 'https://ntfy.sh' }, telegram: { token: tgToken.value.trim(), chatId: tgChat.value.trim() }, webhook: { url: whUrl.value.trim() } });
+      const payload = () => ({ ntfy: { topic: ntfyTopic.value.trim(), server: ntfyServer.value.trim() || 'https://ntfy.sh' }, telegram: { token: tgToken.value.trim(), chatId: tgChat.value.trim() }, webhook: { url: whUrl.value.trim() }, discord: { url: dcUrl.value.trim() }, slack: { url: slUrl.value.trim() } });
       const saveSettings = async () => {
         const res = await srvApi('PUT', '/api/settings', payload());
         srv.channels = res.configured;
@@ -4462,6 +4664,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   // prime = record the markers already present so only new ones fire
   function evaluateMarkerAlert(a, bars, prime) {
     if (!a.active || servedByServer(a)) return;
+    if (!prime) { const g = AL.gate(a); if (g === 'expired') { alertExpired(a); return; } if (g === 'off') return; }
     const cond = AL.isCond(a);
     const res = cond ? AL.evaluateCondition(a, bars, prime, resolveDef, IND.defaults) : AL.evaluateMarker(a, scriptDefs.get(a.scriptId), bars, prime, IND.defaults);
     if (res.type === 'pause') return pauseAlert(a, res.reason);
@@ -4469,6 +4672,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     if (res.type === 'prime') { a.lastBarT = res.t; save(); return; }
     if (res.type !== 'fire') return;
     const msg = cond ? AL.applyCondFire(a, res) : AL.applyMarkerFire(a, res);
+    logAlert(msg, a);
     if (a.server) a.dirty = true; // fired here while the server was away: tell it later
     save();
     refreshAlerts();
@@ -4657,6 +4861,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   $('#acrossToggle').addEventListener('click', () => { state.showAcross = !state.showAcross; save(); updateAcross(); refreshAcross(acrossGen); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && acrossKey) refreshAcross(acrossGen); });
   $('#serverBtn').addEventListener('click', () => openServerDialog());
+  $('#alertLogBtn').addEventListener('click', openAlertLog);
   $('#charts').appendChild(h('div', { id: 'dividers', class: 'dividers' }));
   new ResizeObserver(() => positionDividers()).observe($('#charts'));
   applyLayout(state.layout);

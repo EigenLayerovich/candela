@@ -69,8 +69,11 @@ your existing alerts and scripts move to the server automatically.
   name that is hard to guess (*Make one up* creates one), and subscribe to it in the app.
 - **Telegram**: create a bot with @BotFather, send it a message, and enter the bot token and your
   chat ID.
-- **Webhook**: a Discord or Slack incoming-webhook URL, or any URL that accepts a JSON POST
-  (`{ title, message, source, time }`).
+- **Discord**: a channel's webhook URL (Edit channel → Integrations → Webhooks).
+- **Slack**: an incoming-webhook URL for a channel.
+- **Other webhook**: any URL that accepts a JSON POST (`{ title, message, source, time }`).
+
+Each alert can use all of them or only some (*Notify via* in the alert's options).
 
 Open Candela tabs also show fired alerts. Alerts on simulated (DEMO) or imported CSV data stay in the
 browser, since only the browser has that data. If the server stops, open tabs take over until it is
@@ -286,6 +289,13 @@ is meant for personal use.
     legend row or the Alert dialog. Each alert watches its own symbol and timeframe with the settings
     it was created with, even if the chart shows something else, and only new markers fire (not ones
     already on the chart).
+  - *Zones*: select a rectangle and click **Alert**: fires when the price enters and/or leaves its price
+    range. Moving or resizing the rectangle moves the alert.
+  - *Options* for every alert (*Expiry, active hours* in the dialog, or right-click → *Edit alert*): an
+    **expiry** (in 1 hour … 1 month, or a date), **active hours** (e.g. 09:00–17:00, Monday to Friday, in
+    your time zone; outside them the alert doesn't fire) and, with the server, which channels to notify.
+  - **Alert log** (*Log* next to the Alerts title): every alert that fired, here or on the server, with the
+    message saying what happened (price, level, indicator values), and every expiry.
 - **Paper trading** with virtual money: market, limit and stop orders, take profit and stop loss as
   draggable lines on the chart, a trade journal, and trading during Bar Replay; see below.
 - **Watchlist** with live prices and 24h change.
@@ -424,14 +434,18 @@ sell crossunder(fast, slow)
 - `buy` opens a long position (or turns a short into a long), `sell` closes it; `sellshort` opens a short
   (or turns a long into a short), `cover` closes it.
 - The optional `strategy` line sets defaults: starting `capital`, order `size` (% of equity), `commission`
-  (% per order), `stop` loss and take profit `target` (% from the entry; 0 = off).
+  (% per order), `stop` loss and take profit `target` (% from the entry; 0 = off), and `slippage` (% per fill:
+  buys fill that much higher, sells that much lower).
 - Rules are checked when a candle closes and orders fill at the next candle's open, so the test never looks
   ahead. Stops and targets are checked inside each candle; if one candle touches both, the stop counts.
 
 Add a strategy to a chart and the **Strategy Tester** opens below it (or click **Strategy** at the top):
 *Overview* (net profit, win rate, profit factor, max drawdown, average trade, buy & hold, commission, and
-the equity curve against buy & hold), *List of trades* (click one to see it on the chart), and *Properties*
-(change capital, size, commission, stop and target without editing the script). The trades are marked on the
+the equity curve against buy & hold), *Long / short* (every statistic for all, long and short trades side
+by side), *By day* (profit by weekday and day by day, in your time zone), *Monte Carlo* (1,000 made-up
+histories drawn at random from the strategy's trades: the range of returns and drawdowns, and how often it
+lost money), *List of trades* (click one to see it on the chart), and *Properties* (change capital, size,
+commission, stop, target and slippage without editing the script). The trades are marked on the
 chart. It tests the candles loaded on the chart: scroll left to load more history. Two examples are in the
 script editor: *Strategy: EMA cross* and *Strategy: RSI long/short*.
 

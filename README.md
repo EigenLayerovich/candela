@@ -240,9 +240,9 @@ is meant for personal use.
   3M…): see *Custom timeframes* below. Works on every exchange.
 - **Indicators on another timeframe**: any built-in indicator can be calculated on a fixed timeframe
   (e.g. a 200-day SMA that stays the same on 4H, weekly or monthly charts); see below.
-- **Multi-chart layouts**: 1 to 6 charts side by side, stacked, or in grids (2×2, 3×2, one large + two,
+- **Multi-chart layouts**: 1 to 16 charts side by side, stacked, or in grids (2×2, 3×2, 4×2, 3×3, 4×3, 4×4, one large + two,
   and more). Each chart has its own symbol, timeframe, chart type, indicators and live feed. Optional
-  sync of symbol, timeframe, crosshair and date range across charts. Click a chart (or `Alt+1`…`Alt+6`)
+  sync of symbol, timeframe, crosshair and date range across charts. Click a chart (or `Alt+1`…`Alt+9`)
   to make it the one the top bar controls; drag the dividers between charts to resize them (double-click a
   divider to make its two sides equal); right-click → *Maximize this chart* to go back to one.
 - **Symbol comparison**: overlay up to 5 other symbols on a chart (*Compare* button, or right-click →
@@ -361,7 +361,13 @@ with the live price until the day closes, as on other charting apps. It works fo
 - **Chart settings** (gear at the top): (also in the chart's right-click menu) up/down candle colors, background, grid lines, symbol watermark,
   last price line, candle countdown, time zone. They apply to every chart; *Defaults* resets them.
 - **Saved layouts** (layout menu → *Save this layout as…*): keep named sets of charts (symbols, timeframes,
-  indicators, chart types and arrangement) and switch between them.
+  indicators, chart types and arrangement) and switch between them. **Export to file** saves the current
+  layout with its drawings and the scripts it uses as a `.json` file; **Import file…** opens one (on another
+  computer, say) and adds it to your saved layouts. Drawings you already have are kept.
+- **Up to 16 charts**: the layout menu has 4×2, 3×3, 4×3 and 4×4 grids.
+- **Watchlist**: *All / Gainers / Losers* tabs, a 24h volume column, and sorting by any column (click its
+  header; again to reverse; a third time for your own order).
+- **Keyboard shortcuts**: press `?` (or right-click the chart → *Keyboard shortcuts*) for the full list.
 - **Indicator templates** (Indicators → *Templates*): save a chart's indicators under a name and apply them
   to any chart in one click.
 
@@ -452,6 +458,15 @@ The left toolbar has five groups. Click a group to use the tool it shows; hover 
 arrow on its right edge (or right-click it) for the whole menu. A group remembers the tool you picked.
 Star tools (★ in the menus) to collect them under the **heart** button.
 
+- **Magnet** (left toolbar): click once for *weak* (points snap to a candle's open, high, low or close when
+  the mouse is close to one), again for *strong* (always snaps), again for off. The button shows W or S.
+- **Shift** while drawing or dragging a point keeps the line horizontal, vertical or at 45°.
+- **Visibility**: select a drawing, click *Visibility* in its toolbar and pick the timeframes it shows on
+  (minutes, hours, days, weeks, months), e.g. weekly levels that stay off your 5-minute charts.
+- **Fibonacci levels**: select a Fib retracement, extension or channel and click *Levels*: pick a set
+  (classic, with extensions, OTE 0.5 / 0.618 / 0.705 / 0.79) or type your own ratios, extend the lines to
+  the right, shade between levels or not.
+
 - **Lines**: Trend line, Ray, Info line (change, %, bars and angle), Extended line, Trend angle, Horizontal
   line, Horizontal ray, Vertical line, Crossline. **Channels**: Parallel channel, Regression trend (with
   ±2 standard deviations), Flat top/bottom, Disjoint channel. **Pitchforks**: Pitchfork, Schiff, Modified
@@ -517,7 +532,9 @@ new version over the old one (quit Candela from the tray first); your charts and
 | Paper order at a price | right-click the chart → *Buy limit / stop at …* or *Sell …* |
 | Move a paper order, stop loss or take profit | drag its line on the chart |
 | Delete drawing | select it, then `Del` |
-| Focus chart N in a layout | `Alt+1` … `Alt+6` |
+| Focus chart N in a layout | `Alt+1` … `Alt+9` |
+| All keyboard shortcuts | `?` |
+| Keep a drawing line horizontal, vertical or at 45° | hold `Shift` while drawing or dragging a point |
 | Cancel | `Esc` |
 
 ## Custom indicators: Candela Script

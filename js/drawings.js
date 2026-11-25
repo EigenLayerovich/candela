@@ -59,9 +59,17 @@
   }
 
   // Fibonacci levels and their colors
-  const FIB_COLORS = { 0: '#9AA3B2', 0.236: '#F7525F', 0.382: '#F5A623', 0.5: '#22AB94', 0.618: '#2EC4B6', 0.786: '#3D8BFD', 1: '#9AA3B2', 1.272: '#9C6ADE', 1.414: '#E05CB0', 1.618: '#9C6ADE', 2: '#F5A623', 2.618: '#F7525F', 3: '#3D8BFD', 3.618: '#22AB94', 4.236: '#9C6ADE' };
+  const FIB_COLORS = { 0: '#9AA3B2', 0.236: '#F7525F', 0.382: '#F5A623', 0.5: '#22AB94', 0.618: '#2EC4B6', 0.705: '#E05CB0', 0.786: '#3D8BFD', 0.79: '#3D8BFD', 1: '#9AA3B2', 1.272: '#9C6ADE', 1.414: '#E05CB0', 1.618: '#9C6ADE', 2: '#F5A623', 2.618: '#F7525F', 3: '#3D8BFD', 3.618: '#22AB94', 4.236: '#9C6ADE' };
   const fibColor = (l, fallback) => FIB_COLORS[l] || fallback;
   const RETRACE = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+  // level sets offered in the drawing's Levels dialog (d.levels overrides the tool's default)
+  const FIB_SETS = {
+    retracement: { name: 'Classic retracement', levels: [...RETRACE, 1.618] },
+    extension: { name: 'Retracement + extensions', levels: [...RETRACE, 1.272, 1.414, 1.618, 2, 2.618, 3.618, 4.236] },
+    ote: { name: 'Optimal trade entry (OTE)', levels: [0, 0.5, 0.618, 0.705, 0.79, 1] },
+    trendext: { name: 'Trend extension', levels: [0, 0.382, 0.618, 1, 1.272, 1.618, 2, 2.618] },
+  };
+  const fibLevels = (d, dflt) => (Array.isArray(d.levels) && d.levels.length ? [...d.levels].sort((a, b) => a - b) : dflt);
 
   // ---------------------------------------------------------------- the pen: paints, or records shapes for hit testing
   function pen(ctx, api, d, hit) {
@@ -305,11 +313,12 @@
   tool('insidepitchfork', { name: 'Inside pitchfork', ...pitchfork((P) => mid(P[0], mid(P[1], P[2])), true) });
 
   // ---- Fibonacci
-  function levels(g, prices, x1, x2, fmt) {
+  function levels(g, prices, x1, x2, fmt, d = {}) {
     let prev = null;
+    if (d.extend) x2 = g.api.plotW; // lines extended to the right
     for (const [l, price] of prices) {
       const y = g.api.y(price), c = fibColor(l, g.color);
-      if (prev !== null) g.fill([{ x: x1, y: prev }, { x: x2, y: prev }, { x: x2, y }, { x: x1, y }], alpha(c, 0.07));
+      if (prev !== null && d.fill !== false) g.fill([{ x: x1, y: prev }, { x: x2, y: prev }, { x: x2, y }, { x: x1, y }], alpha(c, 0.07));
       g.line({ x: x1, y }, { x: x2, y }, { color: c, width: 1, dash: false });
       g.text(`${l} (${fmt(price)})`, x1 - 6, y, { align: 'right', color: c, bold: false });
       prev = y;
@@ -319,7 +328,7 @@
     name: 'Fib retracement', key: 'Alt+F',
     draw(g, P, d) {
       const [a, b] = d.pts;
-      levels(g, [...RETRACE, 1.618].map((l) => [l, b.p + (a.p - b.p) * l]), Math.min(P[0].x, P[1].x), Math.max(P[0].x, P[1].x), g.api.fmt);
+      levels(g, fibLevels(d, FIB_SETS.retracement.levels).map((l) => [l, b.p + (a.p - b.p) * l]), Math.min(P[0].x, P[1].x), Math.max(P[0].x, P[1].x), g.api.fmt, d);
       g.line(P[0], P[1], { dash: [4, 4], width: 1, color: alpha(g.color, 0.6) });
     },
   });
@@ -327,15 +336,15 @@
     name: 'Trend-based fib extension', n: 3,
     draw(g, P, d) {
       const [a, b, c] = d.pts, x1 = P[2].x, x2 = Math.max(P[1].x, P[2].x) + Math.max(40, Math.abs(P[1].x - P[0].x));
-      levels(g, [0, 0.382, 0.618, 1, 1.272, 1.618, 2, 2.618].map((l) => [l, c.p + (b.p - a.p) * l]), Math.min(x1, x2), Math.max(x1, x2), g.api.fmt);
+      levels(g, fibLevels(d, FIB_SETS.trendext.levels).map((l) => [l, c.p + (b.p - a.p) * l]), Math.min(x1, x2), Math.max(x1, x2), g.api.fmt, d);
       g.poly([P[0], P[1], P[2]], { dash: [4, 4], width: 1 });
     },
   });
   tool('fibchannel', {
     name: 'Fib channel', n: 3,
-    draw(g, P) {
+    draw(g, P, d) {
       const off = vOffset(P[0], P[1], P[2]);
-      for (const l of [0, 0.382, 0.618, 1, 1.618, 2.618]) {
+      for (const l of fibLevels(d, [0, 0.382, 0.618, 1, 1.618, 2.618])) {
         const c = fibColor(l, g.color), a = add(P[0], off, l), b = add(P[1], off, l);
         g.ray(a, b, { color: c, width: 1, dash: false });
         g.text(String(l), a.x - 4, a.y, { align: 'right', color: c, bold: false });
@@ -1030,5 +1039,5 @@
     text: `<path d="M5 6V4h14v2M12 4v16M9 20h6"/>`,
   };
 
-  window.CandelaDrawings = { TOOLS, GROUPS, ICONS, pen, hitTest, alpha };
+  window.CandelaDrawings = { TOOLS, GROUPS, ICONS, pen, hitTest, alpha, FIB_SETS };
 })();

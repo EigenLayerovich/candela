@@ -1059,7 +1059,7 @@
           this._drawTrades(p);
           this._drawAlerts(p);
           this._drawTradeLines(p);
-          if (!this.drawingsHidden) for (const dr of this.drawings) if (!dr.hidden) this._drawDrawing(dr, dr === this.selected);
+          if (!this.drawingsHidden) for (const dr of this.drawings) if (this.shown(dr)) this._drawDrawing(dr, dr === this.selected);
           if (this.creating) this._drawDrawing(this.creating, true);
           if (this.measure) this._drawMeasure();
         }
@@ -1523,7 +1523,7 @@
       if (p === this.main) {
         if (!this.drawingsHidden) {
           for (const d of this.drawings) {
-            if (!d.hidden && DRAW() && DRAW().TOOLS[d.type] && DRAW().TOOLS[d.type].axis) this._axisLabel(this.yOf(p, d.pts[0].p), this._fmtMain(d.pts[0].p), d.color || T.drawing, '#fff', p);
+            if (this.shown(d) && DRAW() && DRAW().TOOLS[d.type] && DRAW().TOOLS[d.type].axis) this._axisLabel(this.yOf(p, d.pts[0].p), this._fmtMain(d.pts[0].p), d.color || T.drawing, '#fff', p);
           }
         }
         for (const al of this.alerts) this._axisLabel(this.yOf(p, al.price), this._fmtMain(al.price), T.alert, '#111', p);
@@ -1738,7 +1738,7 @@
       try {
         for (let k = this.drawings.length - 1; k >= 0; k--) {
           const d = this.drawings[k], tool = DR.TOOLS[d.type];
-          if (!tool || d.hidden) continue;
+          if (!tool || !this.shown(d)) continue;
           const P = this._toolPoints(d);
           if (d === this.selected) {
             const H = this._handles(d, tool, P, api);
@@ -1752,17 +1752,34 @@
       return null;
     }
 
+    // the timeframe family of the chart, for drawings shown only on some timeframes
+    tfGroup() {
+      const iv = this.rawInterval || this.interval || 3600e3, D = 86400e3;
+      return iv < 3600e3 ? 'm' : iv < D ? 'h' : iv < 7 * D ? 'd' : iv < 28 * D ? 'w' : 'M';
+    }
+    shown(d) { return !d.hidden && !(d.vis && d.vis.includes(this.tfGroup())); }
+
     _pointFromMouse(x, y) {
       const n = this.bars.length;
       const idx = Math.round(this.idxAt(x));
       let price = this.vOf(this.main, y);
+      // magnet: strong always snaps to the nearest open/high/low/close, weak only when the mouse is close to one
       if (this.magnet && idx >= 0 && idx < n) {
         const b = this.bars[idx];
         let best = price, bd = Infinity;
         for (const v of [b.o, b.h, b.l, b.c]) { const dy = Math.abs(this.yOf(this.main, v) - y); if (dy < bd) { bd = dy; best = v; } }
-        price = best;
+        if (this.magnet !== 'weak' || bd <= 14) price = best;
       }
       return { t: this.indexToTime(idx), p: price };
+    }
+    // Shift held: the line from `anchor` stays horizontal, vertical or at 45°
+    _shiftPoint(e, anchor, x, y) {
+      if (!e.shiftKey || !anchor) return this._pointFromMouse(x, y);
+      const a = this._pt(anchor), dx = x - a.x, dy = y - a.y, T = Math.tan(Math.PI / 8);
+      if (Math.abs(dy) <= Math.abs(dx) * T) return { t: this.indexToTime(Math.round(this.idxAt(x))), p: anchor.p };
+      if (Math.abs(dx) <= Math.abs(dy) * T) return { t: anchor.t, p: this.vOf(this.main, y) };
+      const xi = Math.round(this.idxAt(x)), xs = this.xAt(xi);
+      return { t: this.indexToTime(xi), p: this.vOf(this.main, a.y + Math.sign(dy) * Math.abs(xs - a.x)) };
     }
 
     _freePoint(x, y) { return { t: this.indexToTime(this.idxAt(x)), p: this.vOf(this.main, y) }; }
@@ -1851,7 +1868,7 @@
         // Measure: the ruler tool or Shift+click starts it, the next click ends it, one more removes it
         if (this.measure && this.measure.done) { this.measure = null; this.invalidate(); if (!e.shiftKey && this.tool !== 'ruler') return; }
         if (this.measure && !this.measure.done) { this.measure.b = this._pointFromMouse(x, y); this.measure.done = true; this.invalidate(); return; }
-        if (reg.r === 'plot' && reg.p === this.main && (e.shiftKey || this.tool === 'ruler')) {
+        if (reg.r === 'plot' && reg.p === this.main && ((e.shiftKey && this.tool === 'cursor' && !this.creating) || this.tool === 'ruler')) {
           const pt = this._pointFromMouse(x, y);
           this.measure = { a: pt, b: { ...pt }, done: false, fromDown: true };
           if (this.tool === 'ruler') { this.tool = 'cursor'; this.onToolDone(); }
@@ -1864,7 +1881,7 @@
           if (!tool) { this.tool = 'cursor'; this.onToolDone(); return; }
           if (this.creating) {
             // the next point of a 3+ point or multi-point drawing, or the last one
-            const d = this.creating, pt = this._pointFromMouse(x, y);
+            const d = this.creating, pt = this._shiftPoint(e, d.pts[d.pts.length - 2], x, y);
             d.pts[d.pts.length - 1] = pt;
             if (tool.n === 'multi' || d.pts.length < tool.n) d.pts.push({ ...pt });
             else this._finishCreating();
@@ -1943,7 +1960,7 @@
           if (this.freehand) {
             const last = this._pt(pts[pts.length - 1]);
             if (Math.hypot(x - last.x, y - last.y) >= 3) pts.push(this._freePoint(x, y));
-          } else pts[pts.length - 1] = this._pointFromMouse(x, y);
+          } else pts[pts.length - 1] = this._shiftPoint(e, pts[pts.length - 2], x, y);
         } else if (dr) {
           switch (dr.kind) {
             case 'pan': {
@@ -1989,7 +2006,7 @@
               break;
             }
             case 'handle': {
-              dr.d.pts[dr.h] = this._pointFromMouse(x, y);
+              dr.d.pts[dr.h] = this._shiftPoint(e, dr.d.pts.length === 2 ? dr.d.pts[1 - dr.h] : null, x, y);
               const tl = DRAW().TOOLS[dr.d.type];
               if (tl && tl.normalize) tl.normalize(dr.d);
               break;

@@ -72,7 +72,10 @@
     '4v': { name: '4 side by side', cols: 4, rows: 1, cells: [[0, 0, 1, 1], [1, 0, 1, 1], [2, 0, 1, 1], [3, 0, 1, 1]] },
     '6': { name: '3 × 2 grid', cols: 3, rows: 2, cells: [[0, 0, 1, 1], [1, 0, 1, 1], [2, 0, 1, 1], [0, 1, 1, 1], [1, 1, 1, 1], [2, 1, 1, 1]] },
   };
-  const LAYOUT_ORDER = ['1', '2v', '2h', '3v', '3l', '3t', '4', '4v', '6']; // object key order would put '1','4','6' first
+  // bigger grids: every cell one chart
+  const gridLayout = (cols, rows) => ({ name: `${cols} × ${rows} grid`, cols, rows, cells: Array.from({ length: cols * rows }, (_, i) => [i % cols, Math.floor(i / cols), 1, 1]) });
+  Object.assign(LAYOUTS, { '8': gridLayout(4, 2), '9': gridLayout(3, 3), '12': gridLayout(4, 3), '16': gridLayout(4, 4) });
+  const LAYOUT_ORDER = ['1', '2v', '2h', '3v', '3l', '3t', '4', '4v', '6', '8', '9', '12', '16']; // object key order would put '1','4','6' first
 
   function layoutIcon(key) {
     const L = LAYOUTS[key], W = 22, H = 16, g = 1.6;
@@ -130,6 +133,8 @@
   CC.setTimeZone(state.timeZone || 'local');
   CC.setLook(state.look || {});
   if (!state.exNotes || typeof state.exNotes !== 'object') state.exNotes = {};
+  if (state.magnet === true) state.magnet = 'strong';
+  state.wl = { tab: 'all', sort: null, ...state.wl };
   if (!Array.isArray(state.customTfs)) state.customTfs = [];
   state.customTfs = state.customTfs.filter((tf) => MD.ensureTf(tf));
   for (const c of state.charts) {
@@ -807,6 +812,8 @@
       const lock = h('button', { class: 'db-btn' + (d.locked ? ' active' : ''), title: 'Lock position' }, d.locked ? 'Locked' : 'Lock');
       lock.addEventListener('click', () => { d.locked = !d.locked; lock.classList.toggle('active', d.locked); lock.textContent = d.locked ? 'Locked' : 'Lock'; changed(); });
       const kids = [color, width, dash, lock];
+      if (FIB_TOOLS[d.type]) kids.push(h('button', { class: 'db-btn', title: 'Fibonacci levels', onclick: () => openFibLevels(this, d) }, 'Levels'));
+      kids.push(h('button', { class: 'db-btn' + (d.vis && d.vis.length ? ' active' : ''), title: 'Show this drawing only on some timeframes', onclick: () => openVisibility(this, d) }, 'Visibility'));
       if (LINE_ALERT[d.type]) kids.push(h('button', { class: 'db-btn', title: 'Alert when the price crosses this line', onclick: () => openLineAlertDialog(this, d) }, 'Alert'));
       if (['hline', 'hray', 'crossline'].includes(d.type)) kids.push(h('button', { class: 'db-btn', title: 'Create a price alert at this line', onclick: () => addAlert(this.symbol, d.pts[0].p) }, 'Alert'));
       if (d.type === 'arrowup' || d.type === 'arrowdown') kids.push(h('button', { class: 'db-btn', onclick: async () => { const t = await askText('Label', d.text || '', 'Optional text'); if (t !== null && t !== undefined) { d.text = t; changed(); } } }, d.text ? 'Edit text' : 'Add text'));
@@ -819,6 +826,119 @@
     }
   }
   let demoWarned = false;
+
+  // ---- drawing visibility per timeframe family, and Fibonacci level sets
+  const TF_GROUPS = [['m', 'Minutes'], ['h', 'Hours'], ['d', 'Days'], ['w', 'Weeks'], ['M', 'Months']];
+  function openVisibility(slot, d) {
+    const hidden = new Set(d.vis || []);
+    const boxes = TF_GROUPS.map(([k, label]) => {
+      const cb = h('input', { type: 'checkbox', checked: !hidden.has(k) });
+      return [k, cb, h('label', { class: 'check-row' }, cb, h('span', {}, label))];
+    });
+    const cur = slot.chart.tfGroup();
+    const only = h('button', { class: 'btn ghost', onclick: () => { for (const [k, cb] of boxes) cb.checked = k === cur; } }, `Only ${TF_GROUPS.find(([k]) => k === cur)[1].toLowerCase()} (this chart)`);
+    const m = openModal('Visibility', h('div', { class: 'form' }, h('p', { class: 'muted' }, 'Show this drawing on charts with these timeframes:'), ...boxes.map((b) => b[2]), h('div', {}, only)), {
+      footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: () => {
+        const vis = boxes.filter(([, cb]) => !cb.checked).map(([k]) => k);
+        if (vis.length === TF_GROUPS.length) { toast('Pick at least one timeframe', 'warn', 2000); return; }
+        if (vis.length) d.vis = vis; else delete d.vis;
+        m.close();
+        if (!slot.chart.shown(d)) { slot.chart.select(null); toast('Hidden on this timeframe; it shows again on the others.', 'info', 3000); }
+        slot.chart.invalidate();
+        slot.chart.onDrawingsChange();
+        slot.showDrawBar(slot.chart.selected);
+      } }, 'Save')] });
+  }
+  const FIB_TOOLS = { fib: 'retracement', fibext: 'trendext', fibchannel: null };
+  function openFibLevels(slot, d) {
+    const SETS = DR.FIB_SETS, dflt = FIB_TOOLS[d.type] ? SETS[FIB_TOOLS[d.type]].levels : [0, 0.382, 0.618, 1, 1.618, 2.618];
+    const cur = d.levels && d.levels.length ? d.levels : dflt;
+    const text = h('input', { value: cur.join(', '), spellcheck: 'false' });
+    const preset = h('select', {}, h('option', { value: '' }, 'Pick a set…'), Object.entries(SETS).map(([k, v]) => h('option', { value: k }, v.name)));
+    preset.addEventListener('change', () => { if (preset.value) text.value = SETS[preset.value].levels.join(', '); });
+    const extend = h('input', { type: 'checkbox', checked: !!d.extend }), fill = h('input', { type: 'checkbox', checked: d.fill !== false });
+    const err = h('p', { class: 'pt-err' });
+    const rows = [h('label', {}, h('span', {}, 'Level set'), preset), h('label', {}, h('span', {}, 'Levels'), text), h('small', { class: 'muted' }, 'Comma-separated ratios, e.g. 0, 0.5, 0.618, 0.705, 0.79, 1 (1.272 and above are extensions)')];
+    if (d.type !== 'fibchannel') rows.push(h('label', { class: 'check-row' }, extend, h('span', {}, 'Extend lines to the right')), h('label', { class: 'check-row' }, fill, h('span', {}, 'Shade between levels')));
+    const m = openModal('Fibonacci levels', h('div', { class: 'form' }, ...rows, err), {
+      footer: [h('button', { class: 'btn ghost', onclick: () => { text.value = dflt.join(', '); } }, 'Defaults'), h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: () => {
+        const lv = [...new Set(text.value.split(/[,;\s]+/).filter(Boolean).map(Number))];
+        if (!lv.length || lv.some((v) => !isFinite(v) || v < -5 || v > 10)) { err.textContent = 'Enter numbers between −5 and 10, separated by commas.'; return; }
+        if (lv.length > 24) { err.textContent = 'At most 24 levels.'; return; }
+        lv.sort((a, b) => a - b);
+        if (lv.join() === dflt.join()) delete d.levels; else d.levels = lv;
+        if (d.type !== 'fibchannel') { if (extend.checked) d.extend = true; else delete d.extend; if (fill.checked) delete d.fill; else d.fill = false; }
+        m.close();
+        slot.chart.invalidate();
+        slot.chart.onDrawingsChange();
+      } }, 'Save')] });
+  }
+
+  // ---- keyboard shortcuts (?)
+  function openShortcuts() {
+    const rows = [
+      ['Chart', [['Symbol search', 'start typing a ticker'], ['Timeframe', 'type a number, e.g. 4 then H'], ['Indicators', '/'], ['Reset view', 'Alt+R or double-click the time axis'], ['Undo / redo', 'Ctrl+Z / Ctrl+Y'], ['Focus chart N', 'Alt+1 … Alt+9'], ['Snapshot', 'camera button'], ['This list', '?']]],
+      ['Drawing', [['Trend line', 'Alt+T'], ['Horizontal line / ray', 'Alt+H / Alt+J'], ['Vertical line / cross line', 'Alt+V / Alt+C'], ['Fib retracement', 'Alt+F'], ['Rectangle', 'Alt+Shift+R'], ['Keep a line horizontal, vertical or 45°', 'hold Shift while drawing'], ['Measure', 'Shift + click, or Alt+M'], ['Finish a path', 'double-click or Enter'], ['Delete selected', 'Del'], ['Cancel', 'Esc']]],
+      ['Alerts and trading', [['New alert', 'Alt+A'], ['Alert or order at a price', 'right-click the chart'], ['Move an alert, order, stop or target', 'drag its line'], ['Bar Replay: next candle', 'Shift+→']]],
+    ];
+    const body = h('div', { class: 'shortcuts' }, rows.map(([title, list]) => h('div', { class: 'sc-sec' }, h('div', { class: 'menu-label' }, title),
+      h('table', {}, list.map(([what, keys]) => h('tr', {}, h('td', {}, what), h('td', { class: 'sc-keys' }, keys)))))));
+    openModal('Keyboard shortcuts', body, { wide: true });
+  }
+
+  // ---- layout files: the charts, their drawings and the scripts they use, to back up or move to another computer
+  function exportLayoutFile() {
+    const n = LAYOUTS[state.layout].cells.length, charts = clone(state.charts.slice(0, n));
+    const syms = [...new Set(charts.flatMap((c) => [c.symbol, ...(c.compares || []).map((x) => x.symbol)]))];
+    const ids = new Set(charts.flatMap((c) => (c.indicators || []).filter((i) => i.type.startsWith('script:')).map((i) => i.type.slice(7))));
+    const file = {
+      candela: 'layout', version: 1, exported: new Date().toISOString(), layout: state.layout, charts, sync: clone(state.sync),
+      sizes: state.layoutSizes ? clone(state.layoutSizes[state.layout] || null) : null,
+      drawings: Object.fromEntries(syms.filter((x) => (state.drawings[x] || []).length).map((x) => [x, clone(state.drawings[x])])),
+      scripts: state.scripts.filter((x) => ids.has(x.id)).map(clone),
+    };
+    const a = document.createElement('a');
+    a.download = `candela-layout_${charts.map((c) => bare(c.symbol)).slice(0, 3).join('-')}_${new Date().toISOString().slice(0, 10)}.json`.replace(/[^\w.-]+/g, '_');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(file, null, 1)], { type: 'application/json' }));
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('Layout file saved', 'info', 2000);
+  }
+  function importLayoutFile() {
+    const inp = h('input', { type: 'file', accept: '.json,application/json' });
+    inp.addEventListener('change', async () => {
+      const f = inp.files[0];
+      if (!f) return;
+      let L;
+      try { L = JSON.parse(await f.text()); } catch (e) { toast('That file isn\'t a Candela layout (not JSON).', 'warn'); return; }
+      if (!L || L.candela !== 'layout' || !LAYOUTS[L.layout] || !Array.isArray(L.charts) || !L.charts.length) { toast('That file isn\'t a Candela layout.', 'warn'); return; }
+      const cleanChart = (c) => c && typeof c.symbol === 'string' && typeof c.tf === 'string' && MD.ensureTf(c.tf);
+      if (!L.charts.every(cleanChart)) { toast('The layout file is damaged (a chart has no symbol or timeframe).', 'warn'); return; }
+      // scripts first, so their indicators load; a script with the same id is kept as it is here
+      let addedScripts = 0;
+      for (const sc of Array.isArray(L.scripts) ? L.scripts : []) {
+        if (!sc || typeof sc.id !== 'string' || typeof sc.code !== 'string' || state.scripts.some((x) => x.id === sc.id)) continue;
+        state.scripts.push({ id: sc.id, name: String(sc.name || 'Imported script').slice(0, 80), code: sc.code });
+        compileSaved(sc);
+        addedScripts++;
+      }
+      let replaced = 0;
+      for (const [sym, list] of Object.entries(L.drawings || {})) {
+        if (!Array.isArray(list)) continue;
+        const mine = state.drawings[sym] || [], ids = new Set(mine.map((d) => d.id));
+        const add = list.filter((d) => d && typeof d.type === 'string' && Array.isArray(d.pts) && !ids.has(d.id));
+        if (add.length) { state.drawings[sym] = [...mine, ...add]; replaced += add.length; }
+      }
+      const name = (f.name.replace(/\.json$/i, '') || 'Imported layout').slice(0, 60);
+      const entry = { name, layout: L.layout, charts: L.charts.slice(0, LAYOUTS[L.layout].cells.length), sync: L.sync || {}, sizes: L.sizes || null };
+      const i = state.savedLayouts.findIndex((x) => x.name === name);
+      if (i >= 0) state.savedLayouts[i] = entry; else state.savedLayouts.push(entry);
+      save();
+      openSavedLayout(entry);
+      toast(`Imported "${name}" (also in Saved layouts)${replaced ? `, ${replaced} drawing${replaced === 1 ? '' : 's'}` : ''}${addedScripts ? `, ${addedScripts} script${addedScripts === 1 ? '' : 's'}` : ''}.`, 'info', 5000);
+    });
+    inp.click();
+  }
 
   // Drawings belong to a symbol, so every chart showing that symbol shows the same drawings.
   function drawingsChanged(src) {
@@ -1426,6 +1546,9 @@
       save();
       toast(`Layout "${entry.name}" saved`, 'info', 2000);
     } }, 'Save this layout as…'));
+    if (!PREVIEW) saved.appendChild(h('div', { class: 'saved-file' },
+      h('button', { class: 'btn ghost equal-btn', title: 'Save the charts, their drawings and scripts to a file', onclick: () => { menu.classList.add('hidden'); exportLayoutFile(); } }, 'Export to file'),
+      h('button', { class: 'btn ghost equal-btn', title: 'Open a layout file exported from Candela', onclick: () => { menu.classList.add('hidden'); importLayoutFile(); } }, 'Import file…')));
     menu.append(...kids, syncBox, saved);
     menu.classList.remove('hidden');
     const r = $('#layoutBtn').getBoundingClientRect();
@@ -1499,14 +1622,21 @@
     fav.innerHTML = `<svg viewBox="0 0 24 24">${HEART}</svg>`;
     tb.append(txt, fav);
     tb.appendChild(h('div', { class: 'tb-sep' }));
-    const mag = h('button', { class: 'tool', id: 'magnetBtn', title: 'Magnet: snap to OHLC', onclick: () => {
-      state.magnet = !state.magnet;
+    const showMagnet = () => {
+      mag.classList.toggle('active', !!state.magnet);
+      mag.dataset.mode = state.magnet ? (state.magnet === 'weak' ? 'W' : 'S') : '';
+      mag.title = state.magnet === 'weak' ? 'Magnet: weak (snaps to open/high/low/close when close to one). Click for strong.'
+        : state.magnet ? 'Magnet: strong (always snaps to open/high/low/close). Click to turn off.' : 'Magnet: off. Click for weak, again for strong.';
+    };
+    const mag = h('button', { class: 'tool', id: 'magnetBtn', onclick: () => {
+      state.magnet = !state.magnet ? 'weak' : state.magnet === 'weak' ? 'strong' : false;
       for (const s of slots) s.chart.magnet = state.magnet;
-      mag.classList.toggle('active', state.magnet);
+      showMagnet();
+      toast(state.magnet ? `Magnet ${state.magnet}` : 'Magnet off', 'info', 1200);
       save();
     } });
     mag.innerHTML = svg('magnet');
-    mag.classList.toggle('active', state.magnet);
+    showMagnet();
     const hide = h('button', { class: 'tool', title: 'Hide / show drawings', onclick: () => {
       drawingsHidden = !drawingsHidden;
       hide.classList.toggle('active', drawingsHidden);
@@ -2600,16 +2730,72 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   // ------------------------------------------------------------------ watchlist
   let tickStop = null;
 
+  // what the watchlist shows: All / Gainers / Losers, sorted by a column (click its header) or in your order
+  function wlShown() {
+    const W = state.wl, chg = (x) => (quotes[x] ? (quotes[x].c - quotes[x].o) / quotes[x].o : null);
+    let list = state.watchlist.slice();
+    if (W.tab === 'up') list = list.filter((x) => chg(x) > 0);
+    if (W.tab === 'down') list = list.filter((x) => chg(x) < 0);
+    const S = W.sort || (W.tab === 'up' ? { key: 'chg', dir: -1 } : W.tab === 'down' ? { key: 'chg', dir: 1 } : null);
+    if (S) {
+      const val = (x) => (S.key === 'sym' ? bare(x) : S.key === 'last' ? quotes[x]?.c : S.key === 'vol' ? quotes[x]?.vq : chg(x));
+      list.sort((a, b) => {
+        const A = val(a), B = val(b);
+        if (A == null || Number.isNaN(A)) return 1;
+        if (B == null || Number.isNaN(B)) return -1;
+        return (typeof A === 'string' ? A.localeCompare(B) : A - B) * S.dir;
+      });
+    }
+    return list;
+  }
+  function renderWlHead() {
+    let tabs = document.getElementById('wlTabs');
+    const cols = $('.wl-cols');
+    if (!tabs) {
+      tabs = h('div', { id: 'wlTabs', class: 'wl-tabs', role: 'tablist' });
+      cols.parentNode.insertBefore(tabs, cols);
+    }
+    tabs.innerHTML = '';
+    for (const [k, label] of [['all', 'All'], ['up', 'Gainers'], ['down', 'Losers']]) {
+      tabs.appendChild(h('button', { class: 'wl-tab' + (state.wl.tab === k ? ' on' : ''), role: 'tab', onclick: () => { state.wl.tab = k; save(); renderWatchlist(); } }, label));
+    }
+    cols.innerHTML = '';
+    const S = state.wl.sort;
+    for (const [k, label, title] of [['sym', 'Symbol', 'Sort by name'], ['last', 'Last', 'Sort by price'], ['chg', '24h', 'Sort by 24h change'], ['vol', 'Vol', '24h volume in the quote currency (USDT, USD…). Click to sort']]) {
+      const on = S && S.key === k;
+      cols.appendChild(h('button', { class: 'wl-colbtn' + (on ? ' on' : ''), title: title + (on ? ' (click again to reverse, a third time for your order)' : ''), onclick: () => {
+        // click: sort (high to low for numbers), again: reverse, a third time: back to your own order
+        if (!on) state.wl.sort = { key: k, dir: k === 'sym' ? 1 : -1 };
+        else if (S.dir === (k === 'sym' ? 1 : -1)) state.wl.sort = { key: k, dir: -S.dir };
+        else state.wl.sort = null;
+        save();
+        renderWatchlist();
+      } }, label, on ? (S.dir > 0 ? ' ▲' : ' ▼') : ''));
+    }
+  }
+  let wlResortTimer = null;
+  function wlResortSoon() {
+    if (wlResortTimer || (state.wl.tab === 'all' && !state.wl.sort)) return;
+    wlResortTimer = setTimeout(() => {
+      wlResortTimer = null;
+      const want = wlShown().join(), have = [...document.querySelectorAll('#watchlist .wl-row')].map((r) => r.dataset.sym).join();
+      if (want !== have) renderWatchlist();
+    }, 3000);
+  }
   function renderWatchlist() {
     const wl = $('#watchlist');
+    renderWlHead();
     wl.innerHTML = '';
-    for (const sym of state.watchlist) {
+    const shown = wlShown();
+    if (!shown.length && state.watchlist.length) wl.appendChild(h('p', { class: 'muted wl-empty' }, state.wl.tab === 'up' ? 'Nothing in your watchlist is up over 24 hours.' : 'Nothing in your watchlist is down over 24 hours.'));
+    for (const sym of shown) {
       const q = quotes[sym];
       const row = h('div', { class: 'wl-row' + (active && sym === active.symbol ? ' active' : ''), 'data-sym': sym, onclick: () => openSymbol(sym) },
         h('span', { class: 'wl-sym', title: isStock(sym) ? `${bare(sym)} (${MD.isForex(sym) ? 'forex' : 'stock'}, Twelve Data)` : MD.isBStock(sym) ? `${bare(sym)}: Binance bStock tracking ${MD.bStockTicker(sym)}` : exOf(sym) ? `${bare(sym)} on ${exOf(sym).name}` : `${sym} on Binance` },
           bare(sym), exOf(sym) ? h('i', { class: 'ex-tag' }, exOf(sym).tag) : null),
         h('span', { class: 'wl-last' }, q ? q.c.toFixed(decimalsFor(q.c)) : '—'),
         h('span', { class: 'wl-chg' }, q ? fmtChg(q) : ''),
+        h('span', { class: 'wl-vol' }, q && q.vq > 0 ? fmtVol(q.vq) : ''),
         h('button', { class: 'wl-x', title: 'Remove', onclick: (e) => {
           e.stopPropagation();
           state.watchlist = state.watchlist.filter((s) => s !== sym);
@@ -2620,14 +2806,17 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     }
   }
   const fmtChg = (q) => { const p = ((q.c - q.o) / q.o) * 100; return (p >= 0 ? '+' : '') + p.toFixed(2) + '%'; };
+  const fmtVol = (v) => (v >= 1e9 ? (v / 1e9).toFixed(v >= 1e10 ? 0 : 1) + 'B' : v >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(v >= 1e4 ? 0 : 1) + 'K' : v.toFixed(0));
 
-  function updateQuote(sym, c, o) {
+  function updateQuote(sym, c, o, vq) {
     const prev = quotes[sym];
-    quotes[sym] = { c, o };
+    quotes[sym] = { c, o, vq: vq > 0 ? vq : prev ? prev.vq : undefined };
+    wlResortSoon();
     const row = document.querySelector(`.wl-row[data-sym="${sym}"]`);
-    if (!row) return;
+    if (!row) { if (state.wl.tab !== 'all' && state.watchlist.includes(sym)) wlResortSoon(); return; }
     $('.wl-last', row).textContent = c.toFixed(decimalsFor(c));
     $('.wl-chg', row).textContent = fmtChg(quotes[sym]);
+    if (quotes[sym].vq > 0) $('.wl-vol', row).textContent = fmtVol(quotes[sym].vq);
     row.classList.toggle('is-up', c >= o);
     row.classList.toggle('is-down', c < o);
     if (prev && prev.c !== c) {
@@ -2646,9 +2835,9 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     pollStockQuotes();
     pollExQuotes();
     if (!syms.length) return;
-    try { (await MD.tickers24(syms)).forEach((q) => updateQuote(q.s, q.c, q.o)); } catch (e) { /* offline */ }
+    try { (await MD.tickers24(syms)).forEach((q) => updateQuote(q.s, q.c, q.o, q.vq)); } catch (e) { /* offline */ }
     tickStop = MD.tickerStream(syms, (q) => {
-      updateQuote(q.s, q.c, q.o);
+      updateQuote(q.s, q.c, q.o, q.vq);
       // charts with a live stream already check alerts for their own symbol
       if (!slots.some((s) => s.symbol === q.s && s.mode === 'live')) checkAlerts(q.s, q.c);
     });
@@ -2667,7 +2856,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     await Promise.all(syms.map(async (sym) => {
       let q;
       try { q = await MD.ticker(sym); } catch (e) { return; }
-      updateQuote(sym, q.c, q.o);
+      updateQuote(sym, q.c, q.o, q.vq);
       if (!slots.some((x) => x.symbol === sym && x.mode === 'live')) checkAlerts(sym, q.c);
     }));
     exQuoteTimer = setTimeout(pollExQuotes, alertSyms.length || tradeSyms.length ? 5000 : 10000);
@@ -4370,6 +4559,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     }
     item('Reset chart view', () => chart.resetView());
     item('Chart settings… (colors, background)', openChartSettings);
+    item('Keyboard shortcuts (?)', openShortcuts);
     item('Add indicator…', openIndicatorPicker);
     item('Compare symbol…', () => openCompareSearch());
     if (slots.length > 1) item('Maximize this chart', () => { state.charts.splice(0, 0, ...state.charts.splice(slots.indexOf(slot), 1)); rebuildSlots('1'); });
@@ -4441,13 +4631,14 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       if (map[e.code]) { setActiveTool(map[e.code]); e.preventDefault(); return; }
       if (e.code === 'KeyA') { openAlertDialog(); e.preventDefault(); return; }
       if (e.code === 'KeyR') { active.chart.resetView(); e.preventDefault(); return; }
-      // Alt+1…6 focuses a chart in the layout
-      const n = /^Digit([1-6])$/.exec(e.code);
+      // Alt+1…9 focuses a chart in the layout
+      const n = /^Digit([1-9])$/.exec(e.code);
       if (n && slots[+n[1] - 1]) { setActive(slots[+n[1] - 1]); e.preventDefault(); }
       return;
     }
     if (e.ctrlKey || e.metaKey) return;
     if (e.key === '/') { e.preventDefault(); openIndicatorPicker(); return; }
+    if (e.key === '?') { e.preventDefault(); openShortcuts(); return; }
     if (/^[a-zA-Z]$/.test(e.key)) { e.preventDefault(); openSymbolSearch(e.key.toUpperCase()); return; }
     if (/^[1-9]$/.test(e.key)) { e.preventDefault(); openCustomTfDialog(e.key); } // type a timeframe: 2D, 4H…
   });

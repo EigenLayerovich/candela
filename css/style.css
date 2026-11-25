@@ -189,7 +189,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .side-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 6px; font-weight: 700; }
 .icon-btn { border: 0; background: transparent; width: 26px; height: 26px; border-radius: 6px; font-size: 16px; line-height: 1; color: var(--muted); }
 .icon-btn:hover { background: var(--panel-2); color: var(--text); }
-.wl-cols, .wl-row { display: grid; grid-template-columns: 1.35fr 1fr 60px; align-items: center; gap: 6px; padding: 0 12px; }
+.wl-cols, .wl-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 58px 44px; align-items: center; gap: 6px; padding: 0 12px; }
 .wl-cols { font-size: 11px; color: var(--muted); padding-bottom: 4px; }
 .wl-cols span:not(:first-child) { text-align: right; }
 .scroll { overflow-y: auto; min-height: 0; }
@@ -692,3 +692,25 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .pt-results-list { max-height: 260px; }
 .ctx-label.muted { font-weight: 400; font-size: 11px; }
 @media (max-width: 1700px) { #tradeBtn span { display: none; } }
+
+/* ---- watchlist tabs, sortable columns, volume */
+.wl-tabs { display: flex; gap: 2px; padding: 0 10px 6px; }
+.wl-tab { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 5px; cursor: pointer; }
+.wl-tab:hover { background: var(--panel-2); color: var(--text); }
+.wl-tab.on { color: var(--accent); background: var(--accent-soft); }
+.wl-colbtn { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 11px; padding: 0; cursor: pointer; text-align: right; white-space: nowrap; }
+.wl-colbtn:first-child { text-align: left; }
+.wl-colbtn:hover, .wl-colbtn.on { color: var(--text); }
+.wl-vol { text-align: right; color: var(--muted); font-size: 11px; }
+.wl-empty { padding: 10px 12px; font-size: 12px; margin: 0; }
+/* ---- magnet mode badge, visibility checkboxes, shortcuts, layout files */
+#magnetBtn { position: relative; }
+#magnetBtn[data-mode]:not([data-mode=""])::after { content: attr(data-mode); position: absolute; right: 3px; bottom: 2px; font-size: 8px; font-weight: 800; line-height: 1; color: var(--accent); }
+.check-row { display: flex !important; align-items: center; gap: 8px; grid-template-columns: none !important; }
+.shortcuts { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px 22px; }
+.shortcuts table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.shortcuts td { padding: 4px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+.shortcuts td:last-child { text-align: right; }
+kbd { display: inline-block; font: 600 11px/1 inherit; padding: 3px 6px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--panel-2); margin: 1px 0; }
+.saved-file { display: flex; gap: 6px; }
+.saved-file .btn { flex: 1; }

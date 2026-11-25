@@ -1,4 +1,11 @@
-## New in 1.16.0
+## New in 1.17.0
+
+- **Up to 16 charts** (4×2, 3×3, 4×3 and 4×4 grids) and **layout files**: export the current layout with its drawings and scripts, import it anywhere.
+- **Drawings**: show a drawing only on some timeframes (Visibility); weak or strong magnet; hold Shift for horizontal, vertical or 45° lines; Fibonacci level sets (classic, extensions, OTE) and your own levels.
+- **Watchlist**: All / Gainers / Losers tabs, 24h volume column, sort by any column.
+- Press **?** for all keyboard shortcuts.
+
+## In 1.16.0
 
 - **Order flow**: Volume Delta and Cumulative Volume Delta (real taker volume on Binance, estimated elsewhere), and a **Volume Profile** of the visible range with point of control and value area.
 - **Smart-money indicators**: Fair Value Gaps, Order Blocks, Liquidity Levels (buy/sell-side, equal highs/lows, swept levels) and Market Structure (BOS / CHoCH).

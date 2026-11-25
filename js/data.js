@@ -59,7 +59,7 @@
   async function tickers24(symbols) {
     if (!symbols.length) return [];
     const rows = await getJSON(`/api/v3/ticker/24hr?type=MINI&symbols=${encodeURIComponent(JSON.stringify(symbols))}`);
-    return rows.map((r) => ({ s: r.symbol, c: +r.lastPrice, o: +r.openPrice }));
+    return rows.map((r) => ({ s: r.symbol, c: +r.lastPrice, o: +r.openPrice, vq: +r.quoteVolume }));
   }
 
   // Resilient WebSocket with reconnect + endpoint fallback.
@@ -106,7 +106,7 @@
     const streams = symbols.map((s) => s.toLowerCase() + '@miniTicker').join('/');
     return socket(`/stream?streams=${streams}`, (m) => {
       const d = m.data;
-      if (d && d.s) onTick({ s: d.s, c: +d.c, o: +d.o });
+      if (d && d.s) onTick({ s: d.s, c: +d.c, o: +d.o, vq: +d.q });
     });
   }
 

@@ -829,7 +829,10 @@
   }
   const setProxy = (base, token = '') => { proxyBase = base; proxyToken = token; };
 
-  Object.assign(MD, { EXCHANGES, exchangeOf, exDisplay, displayName, exPairs: pairs, searchPairs, samePairs, baseQuote, ticker, setProxy });
+  // for other modules (derivatives data): a GET with the same CORS fallback, and Hyperliquid's info endpoint
+  const getJSON = (url, name, cors = 'unknown') => get({ name, cors }, url);
+  const hlInfo = (body) => hlPost(HYPERLIQUID, body);
+  Object.assign(MD, { EXCHANGES, exchangeOf, exDisplay, displayName, exPairs: pairs, searchPairs, samePairs, baseQuote, ticker, setProxy, getJSON, hlInfo, exSocket: socket });
   MD.registerSource((sym) => !!parse(sym), {
     tfs: (sym) => Object.keys(parse(sym).ex.tfs),
     history: (sym, tf, opts) => { const s = parse(sym); return s.ex.history(s.b, s.q, tf, opts); },

@@ -1304,6 +1304,57 @@
   ];
   for (const d of FLOW) DEFS.push(d);
 
+  // ================================================================ derivatives (data from the exchanges, see derivs.js)
+  // ext = { source, series: [{ t, v, … }], perHours }: each candle takes the latest value known by its close
+  function mapExt(bars, ext, val) {
+    const n = bars.length, out = nanArr(n), S = ext.series;
+    let j = -1;
+    for (let i = 0; i < n; i++) {
+      const end = i + 1 < n ? bars[i + 1].t : Infinity;
+      while (j + 1 < S.length && S[j + 1].t < end) j++;
+      if (j >= 0 && (i + 1 < n || S[j].t >= bars[i].t - 7 * 86400e3)) out[i] = val(S[j], bars[i]);
+    }
+    // nothing before the data starts
+    for (let i = 0; i < n && S.length && bars[i].t + (i + 1 < n ? bars[i + 1].t - bars[i].t : 0) <= S[0].t; i++) out[i] = NaN;
+    return out;
+  }
+  // (UPDN: the up/down histogram colors defined above)
+  const DERIVS = [
+    {
+      id: 'oi', name: 'Open Interest', short: 'OI', overlay: false, ext: 'oi',
+      desc: 'Value of all open futures positions on the coin, in dollars (Binance, OKX or Bybit; the chart\'s own exchange for futures)',
+      inputs: [{ key: 'show', label: 'Show', type: 'select', options: ['Open interest', 'Change per candle'], def: 'Open interest' }],
+      plots: [{ key: 'oi', name: 'Open interest', color: '#F5A623', format: 'volume' }, { key: 'chg', name: 'Change', style: 'histogram', palette: UPDN, format: 'volume' }],
+      calc(bars, p, ext) {
+        const oi = mapExt(bars, ext, (r, b) => (r.v > 0 ? r.v : r.coin * b.c));
+        if (p.show === 'Open interest') return { oi, $label: ext.source }; // (only the line shown, so the legend has one value)
+        const chg = oi.map((v, i) => (i && isFinite(v) && isFinite(oi[i - 1]) ? v - oi[i - 1] : NaN));
+        return { chg, chg$i: chg.map((v) => (v >= 0 ? 0 : 1)), $label: ext.source };
+      },
+    },
+    {
+      id: 'funding', name: 'Funding Rate', short: 'Funding', overlay: false, ext: 'funding',
+      desc: 'What longs pay shorts (positive) or shorts pay longs (negative) on the perpetual, at each funding time',
+      inputs: [{ key: 'show', label: 'Show as', type: 'select', options: ['% per payment', '% per 8 hours', '% per year'], def: '% per payment' }],
+      plots: [{ key: 'f', name: 'Funding', style: 'histogram', palette: UPDN }],
+      levels: [0],
+      calc(bars, p, ext) {
+        const k = p.show === '% per 8 hours' ? 8 / (ext.perHours || 8) : p.show === '% per year' ? (365 * 24) / (ext.perHours || 8) : 1;
+        const f = mapExt(bars, ext, (r) => r.v * 100 * k);
+        return { f, f$i: f.map((v) => (v >= 0 ? 0 : 1)), $label: `${ext.source}${ext.perHours ? `, every ${ext.perHours}h` : ''}` };
+      },
+    },
+    {
+      id: 'lsr', name: 'Long/Short Ratio', short: 'L/S', overlay: false, ext: 'lsr',
+      desc: 'Accounts with long positions divided by accounts with short positions on the perpetual (above 1: more longs)',
+      inputs: [],
+      plots: [{ key: 'r', name: 'Long/short', color: '#9C6ADE' }],
+      levels: [1],
+      calc(bars, p, ext) { return { r: mapExt(bars, ext, (x) => x.v), $label: ext.source }; },
+    },
+  ];
+  for (const d of DERIVS) DEFS.push(d);
+
   const BY_ID = Object.fromEntries(DEFS.map((d) => [d.id, d]));
 
   function defaults(def) {

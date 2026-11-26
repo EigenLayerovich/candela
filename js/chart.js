@@ -305,6 +305,7 @@
       this.picking = null;    // a function waiting for a click on the chart (Bar Replay: pick the start)
       this.measure = null;    // a quick measurement (ruler or Shift+click): { a, b, done }; not saved
       this.onAlertMove = () => {}; // an alert line was dragged to a new price
+      this.ext = {};
       this.tradeLines = [];   // paper trading: [{ id, kind: 'pos'|'order'|'sl'|'tp', price, color, label, drag }]
       this.onTradeLineMove = () => {};
       this.title = '';
@@ -616,7 +617,20 @@
     }
     clearTfSources() { this.tfSources = {}; }
 
+    // data from outside the candles (open interest, funding…): { kind: { source, series } or { error } }
+    setExt(kind, data) {
+      this.ext[kind] = data;
+      if (!this.indicators.some((i) => i.def.ext === kind)) return;
+      this.recalc();
+      this._buildLegends();
+    }
     _calc(ind) {
+      if (ind.def.ext) {
+        const e = this.ext[ind.def.ext];
+        ind.error = e && e.error ? e.error : null;
+        try { ind.out = e && e.series ? ind.def.calc(this.bars, ind.params, e) || {} : { $label: e && e.error ? '' : 'loading…' }; } catch (err) { ind.out = {}; ind.error = err.message; }
+        return;
+      }
       try {
         const tf = this.indicatorTf(ind);
         if (tf) {
@@ -680,7 +694,8 @@
     indicatorLabel(ind) {
       const vals = ind.def.inputs.map((inp) => ind.params[inp.key]).filter((v) => v !== 'close');
       const tf = ind.tf ? ' · ' + ind.tf.replace(/h$/, 'H').replace(/d$/, 'D').replace(/w$/, 'W') : '';
-      return ind.def.short + (vals.length ? ' ' + vals.join(' ') : '') + tf;
+      const src = ind.out && ind.out.$label ? ' · ' + ind.out.$label : '';
+      return ind.def.short + (vals.length ? ' ' + vals.join(' ') : '') + tf + src;
     }
 
     plotColor(ind, pl) { return ind.colors[pl.key] || pl.color || (pl.palette && pl.palette[0]) || '#888'; }

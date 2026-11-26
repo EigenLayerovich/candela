@@ -190,6 +190,7 @@
   // ------------------------------------------------------------------ custom script registry
   const CS = window.CandelaScript;
   const AL = window.CandelaAlerts;
+  const DV = window.CandelaDerivs;
   const scriptDefs = new Map(); // script id -> compiled indicator definition
   function compileSaved(sc) {
     try { const d = CS.compile(sc.code, sc.id); scriptDefs.set(sc.id, d); return d; } catch (e) { scriptDefs.delete(sc.id); return null; }
@@ -278,6 +279,7 @@
 
     destroy() {
       this.gen++;
+      clearTimeout(this.extTimer);
       if (this.stop) this.stop();
       this.stopCompares();
       this.stopTfFeeds();
@@ -293,7 +295,24 @@
       if (this === active) renderStatus();
     }
 
+    // open interest, funding and long/short history for the indicators that show them, refreshed every minute
+    syncExt(force = false) {
+      clearTimeout(this.extTimer);
+      const c = this.chart, kinds = [...new Set(c.indicators.map((i) => i.def.ext).filter(Boolean))];
+      if (!kinds.length || PREVIEW) return;
+      const key = this.symbol + '|' + this.tf;
+      if (this.extKey !== key) { c.ext = {}; this.extKey = key; force = true; }
+      for (const k of kinds) {
+        const cur = c.ext[k];
+        if (!force && cur && Date.now() - cur.at < 55e3) continue;
+        const sym = this.symbol, tf = this.tf;
+        DV.history(sym, k, tf).then((r) => { if (this.extKey === sym + '|' + tf) c.setExt(k, { ...r, at: Date.now() }); },
+          (e) => { if (this.extKey === sym + '|' + tf && !(cur && cur.series)) c.setExt(k, { error: e.message, at: Date.now() }); });
+      }
+      this.extTimer = setTimeout(() => this.syncExt(), 60e3);
+    }
     persistIndicators() {
+      this.syncExt();
       const c = this.chart, order = (i) => c.panes.indexOf(i.pane);
       this.cfg.indicators = [...c.indicators].sort((a, b) => order(a) - order(b)).map((i) => ({
         type: i.def.id, params: i.params, colors: i.colors, visible: i.visible, tf: i.tf || undefined,
@@ -634,6 +653,7 @@
       c.watermark = `${bare(sym)}, ${sym.startsWith('CSV:') ? 'CSV' : tfName(tf)}`;
       c.countdown = !isStock(sym) && !/M$/.test(tf); // stock bars don't close on the clock (sessions, closed markets)
       c.setData(bars, interval, { resetView: true });
+      this.syncExt();
       refreshTradeLines();
       if (this === active) updateHeader();
       if (this.mode === 'live') {
@@ -2173,7 +2193,7 @@
     const inputsBox = h('div', { class: 'form' });
     // compute on another timeframe (not for volume, which belongs to the chart's own candles, or scripts)
     const tfOrig = ind.tf || null;
-    if (!def.script && def.id !== 'vol') {
+    if (!def.script && def.id !== 'vol' && !def.ext) {
       const IND_TFS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '3d', '1w', '1M'];
       const sel = h('select', {});
       const fill = () => {
@@ -2936,9 +2956,160 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   // ---- the chart's coin on every exchange (side panel): price, 24h change, and the gap to this chart
   let acrossKey = null, acrossBase = '', acrossRows = [], acrossTimer = null, acrossGen = 0;
 
+
+  // ---- Market overview: funding rates across exchanges, RSI heatmap, Fear & Greed
+  const MAJORS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'ADA', 'TRX', 'LINK', 'AVAX', 'SUI', 'TON', 'LTC', 'DOT', 'BCH', 'NEAR', 'APT', 'ARB', 'OP', 'PEPE', 'WIF', 'HYPE', 'AAVE', 'UNI', 'ENA', 'TIA', 'SEI', 'INJ', 'FIL', 'ATOM'];
+  const market = { funding: null, fundingAt: 0, rsi: {}, fng: null };
+  function openMarket(tab) {
+    state.marketTab = tab || state.marketTab || 'funding';
+    const body = h('div', { class: 'mk' });
+    const tabs = h('div', { class: 'tabs' });
+    const show = (k) => {
+      state.marketTab = k;
+      save();
+      for (const b of tabs.children) b.classList.toggle('active', b.dataset.k === k);
+      const box = h('div', { class: 'mk-body' });
+      body.replaceChildren(tabs, box);
+      ({ funding: marketFunding, rsi: marketRsi, fng: marketFng })[k](box);
+    };
+    for (const [k, l] of [['funding', 'Funding rates'], ['rsi', 'RSI heatmap'], ['fng', 'Fear & Greed']]) tabs.appendChild(h('button', { class: 'tab', 'data-k': k, onclick: () => show(k) }, l));
+    openModal('Market', body, { wide: true, cls: 'mk-modal' });
+    show(state.marketTab);
+  }
+  const coinsOfInterest = () => {
+    const mine = [active.symbol, ...state.watchlist].map((x) => DV.coinOf(x)).filter(Boolean);
+    return [...new Set([...mine, ...MAJORS])];
+  };
+  async function marketFunding(box) {
+    box.append(h('p', { class: 'muted' }, 'Loading funding rates from 9 exchanges…'));
+    if (!market.funding || Date.now() - market.fundingAt > 60e3) {
+      try { market.funding = await DV.fundingTable(); market.fundingAt = Date.now(); } catch (e) { box.replaceChildren(h('p', { class: 'muted' }, 'Funding rates are unavailable right now.')); return; }
+    }
+    const T = market.funding, exs = T.exchanges;
+    // % per 8 hours, so exchanges that pay every hour (Hyperliquid) or every 4 hours compare fairly
+    const per8 = (x) => (x ? (x.rate * 100 * 8) / (x.hours || 8) : null);
+    const rowOf = (coin) => {
+      const vals = exs.map((e) => (T.data[e] ? per8(T.data[e][coin]) : null));
+      const have = vals.filter((v) => v != null && isFinite(v));
+      return { coin, vals, n: have.length, avg: have.length ? have.reduce((a, v) => a + v, 0) / have.length : null };
+    };
+    let view = state.marketFundingView || 'mine';
+    const render = () => {
+      let rows;
+      if (view === 'mine') rows = coinsOfInterest().map(rowOf).filter((r) => r.n);
+      else {
+        const all = [...new Set(exs.flatMap((e) => Object.keys(T.data[e] || {})))].map(rowOf).filter((r) => r.n >= 3);
+        all.sort((a, b) => b.avg - a.avg);
+        rows = view === 'high' ? all.slice(0, 30) : all.slice(-30).reverse();
+      }
+      const cell = (v) => {
+        if (v == null || !isFinite(v)) return h('td', { class: 'muted' }, '–');
+        const a = Math.min(1, Math.abs(v) / 0.05); // 0.05% per 8 h = full color
+        return h('td', { class: 'fr-cell', style: `background:${v >= 0 ? `rgba(34,171,148,${0.08 + a * 0.4})` : `rgba(247,82,95,${0.08 + a * 0.4})`}` }, (v >= 0 ? '' : '−') + Math.abs(v).toFixed(4));
+      };
+      table.replaceChildren(
+        h('thead', {}, h('tr', {}, h('th', {}, 'Coin'), exs.map((e) => h('th', { title: T.errors[e] || '' }, e, T.errors[e] ? ' ⚠' : '')), h('th', {}, 'Average'), h('th', { title: 'The average, paid for a whole year' }, 'Yearly'))),
+        h('tbody', {}, rows.map((r) => h('tr', { title: `Open ${r.coin}`, onclick: () => { closeModal(); openSymbol(r.coin + 'USDT'); } },
+          h('td', {}, h('b', {}, r.coin)), r.vals.map(cell), cell(r.avg), h('td', { class: r.avg >= 0 ? 'up' : 'down' }, r.avg == null ? '–' : `${(r.avg * 3 * 365).toFixed(1)}%`)))));
+      for (const b of viewBtns.children) b.classList.toggle('on', b.dataset.k === view);
+    };
+    const viewBtns = h('span', { class: 'mk-views' }, [['mine', 'My coins'], ['high', 'Highest'], ['low', 'Lowest']].map(([k, l]) => h('button', { class: 'wl-tab', 'data-k': k, onclick: () => { view = k; state.marketFundingView = k; save(); render(); } }, l)));
+    const table = h('table', { class: 'tt-table mk-table' });
+    const errs = Object.entries(T.errors);
+    box.replaceChildren(
+      h('div', { class: 'mk-bar' }, viewBtns, h('span', { class: 'muted' }, `% per 8 hours (Hyperliquid pays every hour: shown × 8). Positive: longs pay shorts. Updated ${new Date(market.fundingAt).toLocaleTimeString()}.`)),
+      h('div', { class: 'tt-table-wrap mk-scroll' }, table),
+      errs.length ? h('p', { class: 'muted small' }, 'Not loaded: ' + errs.map(([e, why]) => `${e} (${why})`).join(', ') + '.') : null);
+    render();
+  }
+  async function marketRsi(box) {
+    const tfSel = h('select', {}, ['15m', '1h', '4h', '1d'].map((t) => h('option', { value: t, selected: t === (state.marketRsiTf || '4h') }, tfName(t))));
+    const uniSel = h('select', {}, h('option', { value: 'top' }, 'Top 40 on Binance'), h('option', { value: 'wl' }, 'My watchlist'));
+    uniSel.value = state.marketRsiUni || 'top';
+    const area = h('div', { class: 'rsi-map' }), info = h('span', { class: 'muted' });
+    box.append(h('div', { class: 'mk-bar' }, h('span', {}, 'RSI 14 on '), tfSel, uniSel, info), area);
+    const run = async () => {
+      state.marketRsiTf = tfSel.value; state.marketRsiUni = uniSel.value; save();
+      const tf = tfSel.value, key = tf + '|' + uniSel.value;
+      area.replaceChildren(h('p', { class: 'muted' }, 'Calculating…'));
+      let res = market.rsi[key];
+      if (!res || Date.now() - res.at > 120e3) {
+        let syms;
+        if (uniSel.value === 'wl') syms = state.watchlist.filter((x) => !isDemo(x) && !x.startsWith('CSV:')).slice(0, 60);
+        else {
+          try {
+            const rows = await MD.getJSON('https://data-api.binance.vision/api/v3/ticker/24hr?type=MINI', 'Binance', true);
+            const skip = /^(USDC|FDUSD|TUSD|USDP|DAI|EUR|AEUR|BUSD|USD1|XUSD|PAXG|XAUT|WBTC|WBETH|BFUSD|RLUSD|RWUSD|USDE|PYUSD|USDS|U)USDT$/; // stablecoins, gold, wrapped coins
+            syms = rows.filter((r) => /USDT$/.test(r.symbol) && !skip.test(r.symbol) && !MD.isBStock(r.symbol) && +r.lastPrice > 0).sort((a, b) => +b.quoteVolume - +a.quoteVolume).slice(0, 40).map((r) => r.symbol);
+          } catch (e) { area.replaceChildren(h('p', { class: 'muted' }, 'Binance is unavailable right now.')); return; }
+        }
+        const out = [];
+        let next = 0;
+        await Promise.all(Array.from({ length: 6 }, async () => {
+          while (next < syms.length) {
+            const s = syms[next++];
+            try {
+              const bars = await MD.history(s, tf, { limit: 120 });
+              const r = IND.fn.rsiOf(bars.map((b) => b.c), 14);
+              const v = r[r.length - 1];
+              if (isFinite(v)) out.push({ sym: s, rsi: v, chg: (bars[bars.length - 1].c / bars[Math.max(0, bars.length - 25)].c - 1) * 100 });
+            } catch (e) { /* skip */ }
+          }
+        }));
+        res = market.rsi[key] = { at: Date.now(), list: out };
+      }
+      if (tfSel.value + '|' + uniSel.value !== key) return;
+      const list = res.list.slice().sort((a, b) => a.sym.localeCompare(b.sym));
+      const ob = list.filter((x) => x.rsi >= 70).length, os = list.filter((x) => x.rsi <= 30).length;
+      info.textContent = `${list.length} coins · ${ob} overbought (70+) · ${os} oversold (30 or less) · average ${(list.reduce((a, x) => a + x.rsi, 0) / (list.length || 1)).toFixed(1)}`;
+      const H = 380, y = (v) => H - (v / 100) * H;
+      const kids = [[70, 100, 'ob'], [60, 70, 'ob2'], [30, 40, 'os2'], [0, 30, 'os']].map(([lo, hi, k]) => h('div', { class: 'rsi-band ' + k, style: `top:${y(hi)}px;height:${y(lo) - y(hi)}px` }));
+      for (const v of [30, 50, 70]) kids.push(h('div', { class: 'rsi-line', style: `top:${y(v)}px` }, h('span', {}, String(v))));
+      list.forEach((x, i) => {
+        const left = ((i + 0.5) / list.length) * 100;
+        kids.push(h('button', { class: 'rsi-dot ' + (x.rsi >= 70 ? 'hot' : x.rsi <= 30 ? 'cold' : '') + (i % 2 ? ' lab-up' : ''), style: `left:${left}%;top:${y(x.rsi)}px`, title: `${bare(x.sym)}: RSI ${x.rsi.toFixed(1)} · ${x.chg >= 0 ? '+' : ''}${x.chg.toFixed(2)}% over 24 candles. Click to open.`, onclick: () => { closeModal(); openSymbol(x.sym); } },
+          h('i', {}), h('span', {}, bare(x.sym).replace(/USDT$|\/.*$/, ''))));
+      });
+      area.replaceChildren(...kids);
+      area.style.height = H + 'px';
+    };
+    tfSel.addEventListener('change', run);
+    uniSel.addEventListener('change', run);
+    run();
+  }
+  async function marketFng(box) {
+    box.append(h('p', { class: 'muted' }, 'Loading…'));
+    try { if (!market.fng || Date.now() - market.fng.at > 600e3) market.fng = { at: Date.now(), list: await DV.fearGreed(365) }; } catch (e) { box.replaceChildren(h('p', { class: 'muted' }, 'The Fear & Greed index is unavailable right now.')); return; }
+    const L = market.fng.list, now = L[L.length - 1];
+    if (!now) { box.replaceChildren(h('p', { class: 'muted' }, 'No data.')); return; }
+    const col = (v) => (v < 25 ? '#E5484D' : v < 45 ? '#F08C3C' : v <= 55 ? '#C9B33A' : v <= 75 ? '#7CB342' : '#22AB94');
+    const ago = (d) => L[Math.max(0, L.length - 1 - d)];
+    const past = [['Yesterday', ago(1)], ['Last week', ago(7)], ['Last month', ago(30)], ['A year ago', L[0]]];
+    // the last 90 days (or the year) as a line
+    let span = state.fngSpan || 90;
+    const W = 640, Hh = 160;
+    const chart = h('div', { class: 'fng-chart' });
+    const draw = () => {
+      const pts = L.slice(-span), n = pts.length;
+      const xy = pts.map((p, i) => `${((i / Math.max(1, n - 1)) * W).toFixed(1)},${(Hh - (p.v / 100) * Hh).toFixed(1)}`).join(' ');
+      chart.innerHTML = `<svg viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" class="fng-svg">${[25, 50, 75].map((v) => `<line x1="0" x2="${W}" y1="${Hh - (v / 100) * Hh}" y2="${Hh - (v / 100) * Hh}" class="fng-grid"/>`).join('')}<polyline points="${xy}" class="fng-line"/></svg>`;
+    };
+    const spanBtns = h('span', { class: 'mk-views' }, [[30, '30 days'], [90, '90 days'], [365, '1 year']].map(([d, l]) => h('button', { class: 'wl-tab' + (d === span ? ' on' : ''), onclick: (e) => { span = d; state.fngSpan = d; save(); for (const b of spanBtns.children) b.classList.toggle('on', b === e.currentTarget); draw(); } }, l)));
+    box.replaceChildren(h('div', { class: 'fng' },
+      h('div', { class: 'fng-now' },
+        h('div', { class: 'fng-val', style: `color:${col(now.v)}` }, String(now.v)),
+        h('div', { class: 'fng-label' }, now.label),
+        h('div', { class: 'fng-scale' }, h('i', { style: `left:${now.v}%` })),
+        h('div', { class: 'fng-ticks muted' }, h('span', {}, 'Extreme fear'), h('span', {}, 'Neutral'), h('span', {}, 'Extreme greed'))),
+      h('div', { class: 'fng-past' }, past.filter((x) => x[1]).map(([l, p]) => h('div', {}, h('span', { class: 'muted' }, l), h('b', { style: `color:${col(p.v)}` }, `${p.v} ${p.label}`))))),
+    h('div', { class: 'mk-bar' }, h('b', {}, 'History'), spanBtns), chart,
+    h('p', { class: 'muted small' }, 'Crypto Fear & Greed Index by alternative.me, updated daily: volatility, momentum and volume, social media, dominance and trends combined into one number from 0 (extreme fear) to 100 (extreme greed).'));
+    draw();
+  }
+
   // ---- Order book and trades (side panel), for exchanges that stream them (Hyperliquid)
   state.flow = { open: true, tab: 'book', group: 0, usd: false, big: 50000, ...state.flow };
-  const flow = { key: null, stopBook: null, stopTrades: null, book: null, trades: [], timer: null, status: '', ex: null, b: null, q: null, mid: null };
+  const flow = { liqs: [], liqKey: null, stopLiq: null, sym: null, hasBook: false, key: null, stopBook: null, stopTrades: null, book: null, trades: [], timer: null, status: '', ex: null, b: null, q: null, mid: null };
   const flowSupported = (sym) => { const ex = exOf(sym); return !!(ex && ex.book && ex.trades); };
   // price groupings offered for the current price: [sigFigs, mantissa, tick]
   function flowGroups(px) {
@@ -2955,17 +3126,37 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   }
   function updateFlow() {
     const sec = $('#flowSec'), sym = active ? active.symbol : null;
-    const ok = !PREVIEW && sym && flowSupported(sym) && !(active && active.replay);
+    const hasBook = !!sym && flowSupported(sym), coin = sym && !PREVIEW ? DV.coinOf(sym) : null;
+    const ok = !PREVIEW && !!sym && (hasBook || !!coin) && !(active && active.replay);
     sec.classList.toggle('hidden', !ok || !state.flow.open);
     $('#bookBtn').hidden = !ok;
     $('#bookBtn').classList.toggle('active', !!(ok && state.flow.open));
+    $('#bookBtn').title = hasBook ? 'Order book, trades and liquidations' : 'Liquidations (Binance, Bybit, OKX)';
     const run = ok && state.flow.open && !document.hidden;
+    flow.hasBook = hasBook;
+    // liquidations: one stream per coin
+    const liqKey = run && coin ? coin : null;
+    if (liqKey !== flow.liqKey) {
+      if (flow.stopLiq) flow.stopLiq();
+      flow.stopLiq = null;
+      flow.liqs = [];
+      flow.liqKey = liqKey;
+      if (liqKey) flow.stopLiq = DV.liquidations(sym, (list) => {
+        const seen = new Set(flow.liqs.map((x) => x.ex + x.t + x.px));
+        for (const x of list) if (!seen.has(x.ex + x.t + x.px)) flow.liqs.push(x);
+        flow.liqs.sort((x, y) => x.t - y.t);
+        if (flow.liqs.length > 500) flow.liqs.splice(0, flow.liqs.length - 500);
+        flowSoon();
+      });
+    }
     const g = flowGroups(flow.mid)[state.flow.group] || [5, null];
-    const key = run ? `${sym}|${g[0]}|${g[1]}` : null;
-    if (key === flow.key) { renderFlow(); return; }
+    const key = run && hasBook ? `${sym}|${g[0]}|${g[1]}` : null;
+    if (key === flow.key) { if (run) { flow.sym = sym; renderFlow(); } return; }
     const sameSym = flow.key && key && flow.key.split('|')[0] === sym;
     stopFlow();
+    flow.sym = run ? sym : null;
     if (!run) return;
+    if (!key) { flow.book = null; flow.trades = []; flow.mid = null; renderFlow(); return; }
     const s = MD.exchangeOf(sym), [, b, q] = /^[A-Z]+:([^/]+)\/(.+)$/.exec(sym);
     flow.key = key; flow.ex = s; flow.b = b; flow.q = q;
     if (!sameSym) { flow.book = null; flow.trades = []; flow.mid = null; }
@@ -2993,25 +3184,40 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   }
   function renderFlow() {
     const box = $('#flowBody'), head = $('#flowCtl');
-    if (!box || !flow.key) return;
+    if (!box || !flow.sym) return;
     const c = active.chart, F = state.flow, fp = (v) => c.fmtPrice(v);
+    const tab = flow.hasBook ? F.tab : 'liq';
     const fs = (v, px) => (F.usd ? fmtVol(v * px) : v >= 1000 ? fmtVol(v) : (+v.toPrecision(4)).toString());
     // controls
     head.innerHTML = '';
-    for (const [k, l] of [['book', 'Book'], ['trades', 'Trades']]) head.appendChild(h('button', { class: 'wl-tab' + (F.tab === k ? ' on' : ''), onclick: () => { F.tab = k; save(); renderFlow(); } }, l));
-    if (F.tab === 'book' && flow.mid) {
+    for (const [k, l] of [...(flow.hasBook ? [['book', 'Book'], ['trades', 'Trades']] : []), ['liq', 'Liquidations']]) head.appendChild(h('button', { class: 'wl-tab' + (tab === k ? ' on' : ''), onclick: () => { F.tab = k; save(); renderFlow(); } }, l));
+    if (tab === 'book' && flow.mid) {
       const sel = h('select', { class: 'flow-sel', title: 'Price grouping', onchange: () => { F.group = +sel.value; save(); updateFlow(); } },
         flowGroups(flow.mid).map(([, , t], i) => h('option', { value: i, selected: i === F.group }, fmtTick(t))));
       head.appendChild(sel);
     }
-    if (F.tab === 'trades') {
-      const sel = h('select', { class: 'flow-sel', title: 'Highlight trades worth at least', onchange: () => { F.big = +sel.value; save(); renderFlow(); } },
+    if (tab === 'trades' || tab === 'liq') {
+      const sel = h('select', { class: 'flow-sel', title: tab === 'liq' ? 'Highlight liquidations worth at least' : 'Highlight trades worth at least', onchange: () => { F.big = +sel.value; save(); renderFlow(); } },
         [1000, 10000, 50000, 100000, 500000, 1000000].map((v) => h('option', { value: v, selected: v === F.big }, '≥ $' + fmtVol(v))));
       head.appendChild(sel);
     }
-    head.appendChild(h('button', { class: 'wl-tab' + (F.usd ? ' on' : ''), title: 'Sizes in dollars or in the coin', onclick: () => { F.usd = !F.usd; save(); renderFlow(); } }, F.usd ? '$' : flow.b.replace(/^[A-Z]+\./, '')));
+    if (tab !== 'liq') head.appendChild(h('button', { class: 'wl-tab' + (F.usd ? ' on' : ''), title: 'Sizes in dollars or in the coin', onclick: () => { F.usd = !F.usd; save(); renderFlow(); } }, F.usd ? '$' : flow.b.replace(/^[A-Z]+\./, '')));
     box.innerHTML = '';
-    if (F.tab === 'book') {
+    if (tab === 'liq') {
+      // forced closes of leveraged positions: longs liquidated are forced sells (red), shorts forced buys (green)
+      const now = Date.now(), hour = flow.liqs.filter((x) => now - x.t < 3600e3);
+      const lv = hour.filter((x) => x.long).reduce((a, x) => a + x.usd, 0), sv = hour.filter((x) => !x.long).reduce((a, x) => a + x.usd, 0);
+      box.append(h('div', { class: 'tr-sum', title: 'Liquidations seen in the last hour (Binance, Bybit, OKX)' },
+        h('span', { class: 'down' }, `Longs $${fmtVol(lv)}`), h('span', { class: 'muted' }, 'last hour'), h('span', { class: 'up' }, `Shorts $${fmtVol(sv)}`)),
+      h('div', { class: 'ob-cols liq muted' }, h('span', {}, 'Price'), h('span', {}, 'Value'), h('span', {}, ''), h('span', {}, 'Time')));
+      if (!flow.liqs.length) box.appendChild(h('p', { class: 'muted flow-msg' }, `Waiting for ${DV.coinOf(flow.sym)} liquidations on Binance, Bybit and OKX. They come in bursts when the price moves fast.`));
+      for (const x of flow.liqs.slice(-100).reverse()) {
+        box.appendChild(h('div', { class: 'tr-row liq ' + (x.long ? 'sell' : 'buy') + (x.usd >= F.big ? ' big' : ''), title: `${x.long ? 'Long' : 'Short'} liquidated on ${x.ex}: ${+x.qty.toPrecision(4)} at ${fp(x.px)}` },
+          h('span', { class: 'ob-px' }, fp(x.px)), h('span', {}, '$' + fmtVol(x.usd)), h('span', { class: 'muted liq-ex' }, { Binance: 'BN', Bybit: 'BY', OKX: 'OK' }[x.ex] || x.ex.slice(0, 2)), h('span', { class: 'muted' }, new Date(x.t).toLocaleTimeString(undefined, { hour12: false }))));
+      }
+      return;
+    }
+    if (tab === 'book') {
       const bk = flow.book;
       if (!bk) { box.appendChild(h('p', { class: 'muted flow-msg' }, flow.status === 'error' ? 'The order book is unavailable right now.' : 'Connecting…')); return; }
       const N = 12, asks = bk.asks.slice(0, N), bids = bk.bids.slice(0, N);
@@ -3399,6 +3605,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   function alertSources(chart) {
     const out = [{ id: 'price', label: 'Price', spec: { src: 'price' } }];
     for (const ind of chart.indicators) {
+      if (ind.def.ext) continue; // exchange data the alert server can't follow
       const lines = ind.def.plots.filter((pl) => pl.style !== 'mark');
       const base = chart.indicatorLabel({ ...ind, tf: null });
       for (const pl of lines) {
@@ -5046,6 +5253,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   $('#wlTitle').addEventListener('click', (e) => { e.stopPropagation(); showWatchlistMenu(e.currentTarget); });
   $('#acrossToggle').addEventListener('click', () => { state.showAcross = !state.showAcross; save(); updateAcross(); refreshAcross(acrossGen); });
   $('#flowToggle').addEventListener('click', () => { state.flow.open = false; save(); updateFlow(); });
+  $('#marketBtn').addEventListener('click', () => openMarket());
   $('#bookBtn').addEventListener('click', () => { state.flow.open = !state.flow.open; save(); updateFlow(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && acrossKey) refreshAcross(acrossGen); });
   $('#serverBtn').addEventListener('click', () => openServerDialog());

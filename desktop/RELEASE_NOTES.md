@@ -1,4 +1,10 @@
-## New in 1.21.0
+## New in 1.22.0
+
+- **Open Interest, Funding Rate and Long/Short Ratio** indicators with history, on any crypto chart (Binance, OKX or Bybit data; Hyperliquid's own hourly funding).
+- **Live liquidations** from Binance, Bybit and OKX (Book button → Liquidations).
+- **Market** window: funding rates on 9 exchanges side by side, an RSI heatmap of the top 40 coins, and the Fear & Greed index.
+
+## In 1.21.0
 
 - **New chart types**: Baseline, Step line, High-low, Volume candles, Line break and Range bars.
 - **Indexed to 100** price scale (click the % button twice).

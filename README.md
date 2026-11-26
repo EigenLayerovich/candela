@@ -284,7 +284,7 @@ is meant for personal use.
   **Renko, Kagi, Point & Figure, Line break and Range bars** (see below)
 - **Custom indicators** with Candela Script, a small language with an editor, examples and reference
   (see below).
-- **Indicators (75)**, all free:
+- **Indicators (78)**, all free:
   - *Moving averages and overlays*: SMA, EMA, WMA, Hull, DEMA, TEMA, VWMA, ALMA, SMMA, KAMA, Least Squares,
     McGinley Dynamic, MA Ribbon, MA Cross, Envelopes, Bollinger Bands, Keltner, Donchian, VWAP, Supertrend,
     Parabolic SAR, Ichimoku, Chandelier Exit, Williams Alligator, Williams Fractals, Zig Zag, Pivot Points
@@ -297,6 +297,7 @@ is meant for personal use.
     Volatility, Bollinger %B and BandWidth, Choppiness Index, Mass Index.
   - *Order flow and smart money*: Volume Delta, Cumulative Volume Delta, Volume Profile (Visible Range),
     Fair Value Gaps, Order Blocks, Liquidity Levels, Market Structure (BOS / CHoCH); see below.
+  - *Derivatives*: Open Interest, Funding Rate, Long/Short Ratio; see below.
   Every input and color is editable; oscillators get their own resizable, reorderable panes.
 - **Drawing tools (77)**: lines, channels, pitchforks, Fibonacci and Gann tools, chart patterns, Elliott
   waves, cycles, long/short positions, forecasts, volume profiles, fair value gap and order block zones, measurers, brushes, arrows and shapes;
@@ -364,6 +365,29 @@ so the last candle of each day is shorter. Stocks and forex can use custom timef
   (CHoCH).
 
 These are Candela's own versions of widely used ideas; settings and colors are in each indicator's dialog.
+
+## Derivatives data and the Market window
+
+- **Open Interest**, **Funding Rate** and **Long/Short Ratio** indicators (Indicators → search "open
+  interest", "funding", "long/short"): their history under the chart, for any crypto chart. The data comes
+  from the chart's own exchange when it's a perpetual (Binance Futures, Bybit Futures; Hyperliquid for
+  funding, which it pays every hour), otherwise from the coin's USDT perpetual on Binance, then OKX, then
+  Bybit, whichever answers (some block some countries). The legend names the source. Open interest is in
+  dollars (or its change per candle); funding per payment, per 8 hours or per year; long/short is long
+  accounts divided by short accounts. They refresh every minute. Binance keeps 30 days of open interest and
+  long/short history, OKX and Bybit a few hundred periods, so older candles have no value.
+- **Liquidations**: the **Book** button on any crypto chart opens a *Liquidations* tab: the coin's
+  liquidations on Binance, Bybit and OKX as they happen (longs liquidated red, shorts green, big ones
+  highlighted) and the last hour's total for each side.
+- **Market** (top bar):
+  - *Funding rates*: the current funding of your coins (the chart's, your watchlist's and 30 majors) on
+    Binance, Bybit, OKX, Bitget, Gate.io, MEXC, HTX, KuCoin and Hyperliquid side by side, in % per 8 hours,
+    with the average and what it comes to over a year; or the 30 highest and lowest across all coins.
+    Click a row to open the coin. MEXC, HTX and KuCoin need the Windows app or `node server.js`.
+  - *RSI heatmap*: RSI 14 of the top 40 coins on Binance (or your watchlist) on 15m, 1H, 4H or 1D, placed
+    on a 0–100 scale with the overbought and oversold zones. Click a coin to open it.
+  - *Fear & Greed*: the Crypto Fear & Greed Index (alternative.me) today, compared with yesterday, last
+    week, last month and a year ago, with its history.
 
 ## Indicators on another timeframe
 
@@ -655,6 +679,7 @@ It shows up in the Indicators dialog automatically, with a settings panel genera
 - `js/alerts-core.js`: alert rules shared by the browser and the server
 - `js/backtest.js`: the Strategy Tester's backtest engine
 - `js/paper.js`: paper trading: accounts, orders, fills, P&L
+- `js/derivs.js`: open interest, funding and long/short history, liquidations, funding across exchanges
 - `js/data.js`: Binance REST/WebSocket, Twelve Data, demo feed, CSV parser
 - `js/exchanges.js`: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex, Binance and
   Bybit futures, and building missing timeframes

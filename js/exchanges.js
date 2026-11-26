@@ -212,8 +212,10 @@
     async pairs() {
       const j = await get(this, `${this.rest}/fapi/v1/exchangeInfo`);
       // perpetuals only (crypto, and the stock / commodity "TradFi" perpetuals)
+      const U = { COMMODITY: 'commodity', FX: 'forex' };
       return (j.symbols || []).filter((x) => x.status === 'TRADING' && /PERPETUAL$/.test(x.contractType) && x.symbol === x.baseAsset + x.quoteAsset)
-        .map((x) => [x.baseAsset, x.quoteAsset]);
+        .map((x) => [x.baseAsset, x.quoteAsset, null, x.underlyingType === 'COIN' || (x.underlyingSubType || []).includes('Crypto') || !x.underlyingType
+          ? classify(x.baseAsset, null) : classify(x.baseAsset, U[x.underlyingType] || 'stock')]);
     },
     history(b, q, tf, opts) {
       return pages(opts, 1500, async (n, end) => {
@@ -498,6 +500,216 @@
     },
   };
 
+
+  // ---------------------------------------------------------------- stocks, forex, metals and commodities
+  // Crypto exchanges also list perpetuals that track stocks, ETFs, stock indices, currencies, metals and
+  // commodities ("TradFi" perps). Each market gets a class: 'stock', 'forex', 'metal', 'commodity', or null
+  // (crypto). The exchanges' own labels say which markets are TradFi; the names say which kind.
+  const METALS = {
+    XAU: 'Gold', GOLD: 'Gold', XAUT: 'Gold (Tether Gold token)', PAXG: 'Gold (PAX Gold token)', IAU: 'Gold ETF', GLD: 'Gold ETF',
+    XAG: 'Silver', SILVER: 'Silver', SLV: 'Silver ETF', XPT: 'Platinum', PLATINUM: 'Platinum', XPD: 'Palladium', PALLADIUM: 'Palladium',
+    XCU: 'Copper', COPPER: 'Copper', HG: 'Copper', XAL: 'Aluminum', ALUMINUM: 'Aluminum', ALUMINIUM: 'Aluminum',
+    XNI: 'Nickel', NICKEL: 'Nickel', XPB: 'Lead', LEAD: 'Lead', XZN: 'Zinc', ZINC: 'Zinc',
+  };
+  const COMMODITIES = {
+    CL: 'Crude oil (WTI)', WTI: 'Crude oil (WTI)', USOIL: 'Crude oil (WTI)', OIL: 'Crude oil', BZ: 'Brent crude oil', BRENT: 'Brent crude oil', UKOIL: 'Brent crude oil',
+    NG: 'Natural gas', NGAS: 'Natural gas', NATGAS: 'Natural gas', GAS: 'Natural gas',
+    CORN: 'Corn', WHEAT: 'Wheat', SOYBEAN: 'Soybeans', COFFEE: 'Coffee', COCOA: 'Cocoa', SUGAR: 'Sugar', COTTON: 'Cotton',
+  };
+  const FIAT = new Set(['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD', 'CNH', 'CNY', 'HKD', 'SGD', 'BRL', 'TRY', 'MXN', 'ZAR', 'KRW', 'INR', 'SEK', 'NOK', 'PLN', 'TWD', 'THB', 'IDR']);
+  const isFxName = (b) => b === 'DXY' || (b.length === 6 && FIAT.has(b.slice(0, 3)) && FIAT.has(b.slice(3)));
+  // hint: what the exchange says ('tradfi' = some traditional market; or 'stock', 'metal', 'forex', 'commodity'), null for crypto
+  function classify(base, hint) {
+    const b = String(base).toUpperCase().replace(/^[A-Z]+\./, ''); // XYZ.GOLD -> GOLD
+    if (!hint) return b === 'PAXG' || b === 'XAUT' ? 'metal' : null; // gold tokens trade on crypto markets too
+    if (hint === 'metal' || METALS[b]) return METALS[b] || hint === 'metal' ? 'metal' : null;
+    if (hint === 'forex' || isFxName(b) || (FIAT.has(b) && hint === 'tradfi')) return 'forex';
+    if (COMMODITIES[b] || hint === 'commodity') return 'commodity';
+    return 'stock'; // stocks, ETFs, stock indices, pre-IPO shares
+  }
+  const classLabel = (base, cls) => {
+    const b = String(base).toUpperCase().replace(/^[A-Z]+\./, '');
+    return cls === 'metal' ? METALS[b] || null : cls === 'commodity' ? COMMODITIES[b] || null : null;
+  };
+
+  // ---------------------------------------------------------------- perpetual futures on OKX, Bitget, Gate.io and MEXC
+  // (Their spot markets are above; Binance, Bybit and Hyperliquid perpetuals are elsewhere in this file.)
+  const futInfo = (o) => o; // funding, mark, index and open interest for the title line (see app.js futuresInfo)
+  const OKXF = {
+    id: 'OKXF', name: 'OKX Futures', short: 'OKX perp', tag: 'OKF', futures: true, cors: true, rest: 'https://www.okx.com',
+    tfs: OKX.tfs,
+    ok: OKX.ok,
+    async pairs() {
+      // instCategory 3: stocks and ETFs, 4: commodities and metals (1: crypto)
+      return this.ok(await get(this, `${this.rest}/api/v5/public/instruments?instType=SWAP`)).filter((p) => p.state === 'live' && /-(USDT|USDC)-SWAP$/.test(p.instId)).map((p) => {
+        const [b, q] = p.instFamily.split('-');
+        return [b, q, null, p.instCategory === '3' ? classify(b, 'stock') : p.instCategory === '4' ? classify(b, 'commodity') : classify(b, null)];
+      });
+    },
+    history(b, q, tf, opts) {
+      return pages(opts, 300, async (n, end) => {
+        const url = end
+          ? `${this.rest}/api/v5/market/history-candles?instId=${b}-${q}-SWAP&bar=${this.tfs[tf]}&limit=${n}&after=${Math.floor(end) + 1}`
+          : `${this.rest}/api/v5/market/candles?instId=${b}-${q}-SWAP&bar=${this.tfs[tf]}&limit=${n}`;
+        // swaps: r[5] is in contracts, r[6] in the base asset
+        return this.ok(await get(this, url)).map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[6] }));
+      });
+    },
+    stream(b, q, tf, onBar, onStatus) {
+      const arg = { channel: 'candle' + this.tfs[tf], instId: `${b}-${q}-SWAP` };
+      return liveOrPoll(this, b, q, tf, onBar, onStatus, (bar, status) => socket('wss://ws.okx.com/ws/v5/business', {
+        onOpen: (send) => send({ op: 'subscribe', args: [arg] }),
+        onMessage: (m) => { if (m.arg && m.arg.channel === arg.channel && m.arg.instId === arg.instId && m.data) for (const r of m.data) bar({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[6] }); },
+        onStatus: status, ping: { every: 25000, msg: 'ping' },
+      }));
+    },
+    async ticker(b, q) {
+      const id = `${b}-${q}-SWAP`;
+      const [t, f, oi, mk] = await Promise.all([
+        get(this, `${this.rest}/api/v5/market/ticker?instId=${id}`).then((j) => this.ok(j)[0]),
+        get(this, `${this.rest}/api/v5/public/funding-rate?instId=${id}`).then((j) => this.ok(j)[0]).catch(() => null),
+        get(this, `${this.rest}/api/v5/public/open-interest?instType=SWAP&instId=${id}`).then((j) => this.ok(j)[0]).catch(() => null),
+        get(this, `${this.rest}/api/v5/public/mark-price?instType=SWAP&instId=${id}`).then((j) => this.ok(j)[0]).catch(() => null),
+      ]);
+      const out = { c: +t.last, o: +t.open24h, vq: +t.volCcy24h * +t.last };
+      if (f) Object.assign(out, { funding: +f.fundingRate, nextFunding: +f.fundingTime });
+      if (mk) out.mark = +mk.markPx;
+      if (oi) out.oiValue = +oi.oiUsd;
+      return futInfo(out);
+    },
+  };
+  const BITGETF = {
+    id: 'BITGETF', name: 'Bitget Futures', short: 'Bitget perp', tag: 'BGF', futures: true, cors: true, rest: 'https://api.bitget.com',
+    tfs: { '1m': '1m', '3m': '3m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1H', '2h': '2H', '4h': '4H', '6h': '6Hutc', '12h': '12Hutc', '1d': '1Dutc', '1w': '1Wutc' },
+    ok: BITGET.ok,
+    async pairs() {
+      // isRwa: real-world assets (stocks, ETFs, indices, currencies, metals, energy)
+      return this.ok(await get(this, `${this.rest}/api/v2/mix/market/contracts?productType=usdt-futures`)).filter((p) => p.symbolStatus === 'normal' && p.symbolType === 'perpetual')
+        .map((p) => [p.baseCoin, p.quoteCoin, null, classify(p.baseCoin, p.isRwa === 'YES' ? 'tradfi' : null)]);
+    },
+    history(b, q, tf, opts) {
+      return pages(opts, (end) => (end ? 200 : 1000), async (n, end) => {
+        const url = end
+          ? `${this.rest}/api/v2/mix/market/history-candles?symbol=${b}${q}&productType=usdt-futures&granularity=${this.tfs[tf]}&limit=${n}&endTime=${bucketOf(end, tf) + TF[tf]}`
+          : `${this.rest}/api/v2/mix/market/candles?symbol=${b}${q}&productType=usdt-futures&granularity=${this.tfs[tf]}&limit=${n}`;
+        return this.ok(await get(this, url)).map((r) => ({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+      });
+    },
+    stream(b, q, tf, onBar, onStatus) {
+      const arg = { instType: 'USDT-FUTURES', channel: 'candle' + this.tfs[tf], instId: b + q };
+      return liveOrPoll(this, b, q, tf, onBar, onStatus, (bar, status) => socket('wss://ws.bitget.com/v2/ws/public', {
+        onOpen: (send) => send({ op: 'subscribe', args: [arg] }),
+        onMessage: (m) => {
+          if (!m.arg || m.arg.channel !== arg.channel || m.arg.instId !== arg.instId || !Array.isArray(m.data)) return;
+          const rows = m.action === 'snapshot' ? m.data.slice().sort((x, y) => x[0] - y[0]).slice(-2) : m.data;
+          for (const r of rows) bar({ t: +r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] });
+        },
+        onStatus: status, ping: { every: 25000, msg: 'ping' },
+      }));
+    },
+    async ticker(b, q) {
+      const t = this.ok(await get(this, `${this.rest}/api/v2/mix/market/ticker?symbol=${b}${q}&productType=usdt-futures`))[0];
+      return futInfo({ c: +t.lastPr, o: +t.open24h, vq: +t.quoteVolume, funding: +t.fundingRate, mark: +t.markPrice, index: +t.indexPrice, oiValue: +t.holdingAmount * +t.markPrice });
+    },
+  };
+  const GATEF = {
+    id: 'GATEF', name: 'Gate.io Futures', short: 'Gate perp', tag: 'GTF', futures: true, cors: true, rest: 'https://api.gateio.ws',
+    tfs: { '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '4h', '8h': '8h', '1d': '1d', '1w': '7d' },
+    check: GATE.check,
+    mult: {}, // contract size (base units per contract), for volumes and open interest
+    async pairs() {
+      const H = { stocks: 'stock', indices: 'stock', metals: 'metal', forex: 'forex', commodities: 'commodity' };
+      const list = await this.check(await get(this, `${this.rest}/api/v4/futures/usdt/contracts`));
+      const out = [];
+      for (const c of list) {
+        if (c.in_delisting || c.status !== 'trading' || c.is_pre_market) continue;
+        const [b, q] = c.name.split('_');
+        if (b === 'USDC') continue; // a stablecoin, not a currency pair
+        this.mult[c.name] = +c.quanto_multiplier || 1;
+        out.push([b, q, null, classify(b, H[c.contract_type] || null)]);
+      }
+      return out;
+    },
+    async multOf(b, q) { if (this.mult[`${b}_${q}`] == null) { try { await pairs(this.id); } catch (e) { /* 1 */ } } return this.mult[`${b}_${q}`] || 1; },
+    history(b, q, tf, opts) {
+      return pages(opts, 1000, async (n, end) => {
+        const m = await this.multOf(b, q);
+        let url = `${this.rest}/api/v4/futures/usdt/candlesticks?contract=${b}_${q}&interval=${this.tfs[tf]}&limit=${n}`;
+        if (end) url = `${this.rest}/api/v4/futures/usdt/candlesticks?contract=${b}_${q}&interval=${this.tfs[tf]}&from=${Math.floor((end - n * TF[tf]) / 1000) + 1}&to=${Math.floor(end / 1000)}`;
+        const rows = await this.check(await get(this, url));
+        return rows.map((r) => ({ t: r.t * 1000, o: +r.o, h: +r.h, l: +r.l, c: +r.c, v: +r.v * m }));
+      });
+    },
+    stream(b, q, tf, onBar, onStatus) {
+      const name = `${this.tfs[tf]}_${b}_${q}`, now = () => Math.floor(Date.now() / 1000);
+      return liveOrPoll(this, b, q, tf, onBar, onStatus, (bar, status) => {
+        let m = this.mult[`${b}_${q}`] || 1;
+        this.multOf(b, q).then((x) => { m = x; });
+        return socket('wss://fx-ws.gateio.ws/v4/ws/usdt', {
+          onOpen: (send) => send({ time: now(), channel: 'futures.candlesticks', event: 'subscribe', payload: [this.tfs[tf], `${b}_${q}`] }),
+          onMessage: (msg) => { if (msg.channel === 'futures.candlesticks' && msg.event === 'update' && Array.isArray(msg.result)) for (const d of msg.result) if (d.n === name) bar({ t: d.t * 1000, o: +d.o, h: +d.h, l: +d.l, c: +d.c, v: +d.v * m }); },
+          onStatus: status, ping: { every: 20000, msg: { time: 0, channel: 'futures.ping' } },
+        });
+      });
+    },
+    async ticker(b, q) {
+      const [t] = await this.check(await get(this, `${this.rest}/api/v4/futures/usdt/tickers?contract=${b}_${q}`));
+      const m = await this.multOf(b, q);
+      return futInfo({ c: +t.last, o: +t.last / (1 + +t.change_percentage / 100), vq: +t.volume_24h_quote, funding: +t.funding_rate, mark: +t.mark_price, index: +t.index_price, oiValue: +t.total_size * m * +t.mark_price });
+    },
+  };
+  // MEXC names some stock contracts its own way (NVIDIA_USDT shows as NVDA): the map keeps both
+  const MEXCF = {
+    id: 'MEXCF', name: 'MEXC Futures', short: 'MEXC perp', tag: 'MXF', futures: true, cors: false, rest: 'https://contract.mexc.com',
+    tfs: { '1m': 'Min1', '5m': 'Min5', '15m': 'Min15', '30m': 'Min30', '1h': 'Min60', '4h': 'Hour4', '8h': 'Hour8', '1d': 'Day1', '1w': 'Week1' },
+    names: null,
+    ok(j) { if (!j || j.success === false) throw err(`MEXC: ${(j && j.message) || 'error'}`, { fatal: j && j.code === 1001 }); return j.data; },
+    async pairs() {
+      const names = {}, out = [];
+      for (const c of this.ok(await get(this, `${this.rest}/api/v1/contract/detail`))) {
+        if (c.state !== 0 || c.isHidden || !c.apiAllowed) continue;
+        const tags = (c.conceptPlate || []).join(' '), shown = String(c.displayNameEn || '').split(/[_ ]/)[0] || c.baseCoin, q = c.quoteCoin;
+        const hint = /metals/i.test(tags) ? 'metal' : /forex/i.test(tags) ? 'forex' : /Commodities/.test(tags) ? 'commodity' : /Stock|ETF|stockindex|tradfi/.test(tags) ? 'stock' : null;
+        // stocks under MEXC's own names (NVIDIA_USDT) take their ticker (NVDA); metals keep the plain name (XAU, not GOLD(XAU))
+        const b = hint === 'stock' && /^[A-Z0-9.]+$/.test(shown.toUpperCase()) ? shown.toUpperCase() : c.baseCoin;
+        if (names[`${b}/${q}`]) continue;
+        names[`${b}/${q}`] = c.symbol;
+        out.push([b, q, null, classify(b, hint)]);
+      }
+      this.names = names;
+      return out;
+    },
+    async sym(b, q) {
+      if (!this.names) { try { await pairs(this.id); } catch (e) { /* guess */ } }
+      return (this.names && this.names[`${b}/${q}`]) || `${b}_${q}`;
+    },
+    history(b, q, tf, opts) {
+      return pages(opts, 1000, async (n, end) => {
+        const s = await this.sym(b, q), to = Math.floor((end || Date.now()) / 1000), from = to - Math.floor((n * TF[tf]) / 1000);
+        const d = this.ok(await get(this, `${this.rest}/api/v1/contract/kline/${s}?interval=${this.tfs[tf]}&start=${from}&end=${to}`));
+        return (d.time || []).map((t, i) => ({ t: t * 1000, o: d.open[i], h: d.high[i], l: d.low[i], c: d.close[i], v: d.vol[i] }));
+      });
+    },
+    stream(b, q, tf, onBar, onStatus) {
+      return liveOrPoll(this, b, q, tf, onBar, onStatus, (bar, status) => {
+        let stop = null, stopped = false;
+        this.sym(b, q).then((s) => {
+          if (stopped) return;
+          stop = socket('wss://contract.mexc.com/edge', {
+            onOpen: (send) => send({ method: 'sub.kline', param: { symbol: s, interval: this.tfs[tf] } }),
+            onMessage: (m) => { const d = m.data; if (m.channel === 'push.kline' && d && d.symbol === s) bar({ t: d.t * 1000, o: +d.o, h: +d.h, l: +d.l, c: +d.c, v: +d.q }); },
+            onStatus: status, ping: { every: 15000, msg: { method: 'ping' } },
+          });
+        });
+        return () => { stopped = true; if (stop) stop(); };
+      });
+    },
+    async ticker(b, q) {
+      const t = this.ok(await get(this, `${this.rest}/api/v1/contract/ticker?symbol=${await this.sym(b, q)}`));
+      return futInfo({ c: +t.lastPrice, o: +t.lastPrice / (1 + +t.riseFallRate), vq: +t.amount24, funding: +t.fundingRate, mark: +t.fairPrice, index: +t.indexPrice });
+    },
+  };
+
   // ---------------------------------------------------------------- HTX (Huobi)
   const HTX = {
     id: 'HTX', name: 'HTX', tag: 'HX', cors: true, rest: 'https://api.huobi.pro',
@@ -631,7 +843,8 @@
               if (u.isDelisted) continue;
               const b = u.name.toUpperCase().replace(':', '.'); // kPEPE -> KPEPE, xyz:TSLA -> XYZ.TSLA
               coins[`${b}/${q}`] = u.name;
-              out.push([b, q, u.name.includes(':') ? u.name.split(':')[1] : /^k[A-Z]/.test(u.name) ? u.name.slice(1) : null]); // found as TSLA, PEPE
+              const tail = u.name.includes(':') ? u.name.split(':')[1] : null, cryptoIndex = /^(TOTAL\d?|OTHERS|BTCD|ETHD|USDTD|BVIV|EVIV)$/.test(tail || '');
+              out.push([b, q, tail || (/^k[A-Z]/.test(u.name) ? u.name.slice(1) : null), tail && !cryptoIndex ? classify(tail, 'tradfi') : classify(tail || b, null)]); // found as TSLA, PEPE
             }
           });
         }
@@ -733,8 +946,8 @@
   const HYPERLIQUID = hyperliquid(false);
   const HYPERLIQUIDS = hyperliquid(true);
 
-  const EXCHANGES = { BYBIT, OKX, BITGET, KUCOIN, GATE, MEXC, HTX, KRAKEN, COINBASE, BITFINEX, BINANCEF, BYBITF, HYPERLIQUID, HYPERLIQUIDS };
-  const ID_RE = /^(BYBIT|OKX|BITGET|KUCOIN|GATE|MEXC|HTX|KRAKEN|COINBASE|BITFINEX|BINANCEF|BYBITF|HYPERLIQUID|HYPERLIQUIDS):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
+  const EXCHANGES = { BYBIT, OKX, BITGET, KUCOIN, GATE, MEXC, HTX, KRAKEN, COINBASE, BITFINEX, BINANCEF, BYBITF, OKXF, BITGETF, GATEF, MEXCF, HYPERLIQUID, HYPERLIQUIDS };
+  const ID_RE = /^(BYBIT|OKX|BITGET|KUCOIN|GATE|MEXC|HTX|KRAKEN|COINBASE|BITFINEX|BINANCEF|BYBITF|OKXF|BITGETF|GATEF|MEXCF|HYPERLIQUID|HYPERLIQUIDS):([A-Z0-9.]+)\/([A-Z0-9.]+)$/;
   function parse(sym) {
     const m = ID_RE.exec(sym || '');
     return m ? { ex: EXCHANGES[m[1]], b: m[2], q: m[3] } : null;
@@ -744,17 +957,43 @@
   const bucketOf = MD.bucketOf;
 
   // ---------------------------------------------------------------- symbol lists & search
-  const lists = {};
+  const lists = {}, loaded = {}, clsMap = {};
+  // spot tokens of stocks (xStocks such as TSLAX, Ondo's TSLAON) on crypto exchanges: a ticker some exchange
+  // lists as a stock, plus X or ON, and not a coin Binance trades (AVAX is not Avista)
+  let coinBases = null;
+  const SHORT_TICKERS = new Set(['V', 'MA', 'KO', 'GE', 'BA', 'PG', 'MO', 'HD', 'GS', 'MS', 'JD', 'MU', 'PM', 'T', 'C', 'F']);
+  function markTokenized() {
+    const stocks = new Set();
+    for (const l of Object.values(loaded)) for (const p of l) if (p.cls === 'stock') stocks.add(p.base.replace(/^[A-Z]+\./, ''));
+    if (!stocks.size || !coinBases) return;
+    for (const [exId, l] of Object.entries(loaded)) {
+      if (EXCHANGES[exId].futures) continue;
+      for (const p of l) {
+        if (p.cls) continue;
+        const m = /^([A-Z0-9]{1,6}?)(X|ON)$/.exec(p.base);
+        if (!m || !stocks.has(m[1]) || coinBases.has(p.base)) continue;
+        // short tickers clash with coin names (SOON, LION, TMX): only the big ones, and only as xStocks (KOX, VX)
+        if (m[1].length < 3 && !(m[2] === 'X' && SHORT_TICKERS.has(m[1]))) continue;
+        p.cls = 'stock'; p.label = `Tokenized ${m[1]}`; p.alt = m[1];
+        clsMap[p.id] = 'stock';
+      }
+    }
+  }
   function pairs(exId) {
     if (!lists[exId]) {
+      if (!coinBases) MD.allSymbols().then((all) => { coinBases = new Set(); for (const x of all) { const s = splitBinance(x); if (s) coinBases.add(s.base); } markTokenized(); }).catch(() => { coinBases = new Set(); });
       lists[exId] = EXCHANGES[exId].pairs().then((ps) => {
         const seen = new Set(), out = [];
-        for (const [b, q, alias] of ps) {
+        for (const [b, q, alias, cls0] of ps) {
           const B = String(b).toUpperCase(), Q = String(q).toUpperCase(), id = `${exId}:${B}/${Q}`;
           if (!/^[A-Z0-9.]+$/.test(B) || !/^[A-Z0-9.]+$/.test(Q) || seen.has(id)) continue;
           seen.add(id);
-          out.push({ id, base: B, quote: Q, key: B + Q, alt: alias ? String(alias).toUpperCase() : B.replace(/^\d+/, '') }); // alt: PEPE for futures' 1000PEPE (or the exchange's own alias)
+          const cls = cls0 !== undefined ? cls0 : classify(B, null);
+          out.push({ id, base: B, quote: Q, key: B + Q, alt: alias ? String(alias).toUpperCase() : B.replace(/^\d+/, ''), cls, label: classLabel(B, cls) }); // alt: PEPE for futures' 1000PEPE (or the exchange's own alias)
+          clsMap[id] = cls;
         }
+        loaded[exId] = out;
+        markTokenized();
         return out;
       }).catch((e) => {
         // blocked here (country, or no server for KuCoin): don't ask again for a while
@@ -777,7 +1016,7 @@
 
   // ---------------------------------------------------------------- the same coin on every exchange
   // Binance symbols carry no separator, so split them by known quote currencies.
-  const BINANCE_QUOTES = ['FDUSD', 'USDT', 'USDC', 'TUSD', 'BUSD', 'USDP', 'AEUR', 'DAI', 'USD', 'EUR', 'TRY', 'BRL', 'JPY', 'GBP', 'AUD', 'BIDR', 'IDR', 'UAH', 'ARS', 'ZAR', 'PLN', 'RON', 'MXN', 'COP', 'CZK', 'BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'TRX'];
+  const BINANCE_QUOTES = ['FDUSD', 'USD1', 'USDT', 'USDC', 'TUSD', 'BUSD', 'USDP', 'AEUR', 'DAI', 'USD', 'EUR', 'TRY', 'BRL', 'JPY', 'GBP', 'AUD', 'BIDR', 'IDR', 'UAH', 'ARS', 'ZAR', 'PLN', 'RON', 'MXN', 'COP', 'CZK', 'BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'TRX'];
   function splitBinance(sym) {
     for (const q of BINANCE_QUOTES) if (sym.endsWith(q) && sym.length > q.length) return { base: sym.slice(0, -q.length), quote: q };
     return null;
@@ -817,6 +1056,26 @@
     return s ? s.ex.ticker(s.b, s.q) : binanceTicker(sym);
   }
 
+  // 'stock', 'forex', 'metal', 'commodity' or 'crypto' for any symbol (exchange lists that aren't loaded yet are
+  // judged by the name: HIP-3 markets, gold tokens)
+  function assetClass(sym) {
+    const s = parse(sym);
+    if (s) {
+      if (clsMap[sym] !== undefined) return clsMap[sym] || 'crypto';
+      if (s.ex.id === 'HYPERLIQUID' && s.b.includes('.')) return classify(s.b, 'tradfi');
+      return classify(s.b, null) || 'crypto';
+    }
+    if (MD.isStock(sym)) {
+      const name = MD.stockLabel(sym);
+      if (!name.includes('/')) return 'stock';
+      const b = name.split('/')[0];
+      return METALS[b] ? 'metal' : COMMODITIES[b] ? 'commodity' : 'forex';
+    }
+    if (MD.isBStock && MD.isBStock(sym)) return 'stock';
+    const bq = splitBinance(sym || '');
+    return bq ? classify(bq.base, null) || 'crypto' : 'crypto';
+  }
+  const loadedPairs = () => loaded;
   const exchangeOf = (sym) => { const s = parse(sym); return s ? s.ex : null; };
   // "BTC/USD"; perpetual futures: "BTC/USDT PERP"
   const exDisplay = (sym) => { const s = parse(sym); return s ? `${s.b}/${s.q}${s.ex.futures ? ' PERP' : ''}` : null; };
@@ -988,7 +1247,7 @@
   // for other modules (derivatives data): a GET with the same CORS fallback, and Hyperliquid's info endpoint
   const getJSON = (url, name, cors = 'unknown') => get({ name, cors }, url);
   const hlInfo = (body) => hlPost(HYPERLIQUID, body);
-  Object.assign(MD, { flowFor, EXCHANGES, exchangeOf, exDisplay, displayName, exPairs: pairs, searchPairs, samePairs, baseQuote, ticker, setProxy, getJSON, hlInfo, exSocket: socket });
+  Object.assign(MD, { assetClass, loadedPairs, classLabel, METALS, flowFor, EXCHANGES, exchangeOf, exDisplay, displayName, exPairs: pairs, searchPairs, samePairs, baseQuote, ticker, setProxy, getJSON, hlInfo, exSocket: socket });
   MD.registerSource((sym) => !!parse(sym), {
     tfs: (sym) => Object.keys(parse(sym).ex.tfs),
     history: (sym, tf, opts) => { const s = parse(sym); return s.ex.history(s.b, s.q, tf, opts); },

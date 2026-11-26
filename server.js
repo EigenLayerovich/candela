@@ -490,7 +490,7 @@ const PROXY_ALLOW = [
   ['api.bybit.com', /^\/v5\/market\/(kline|tickers|instruments-info|open-interest|account-ratio|funding\/history|recent-trade)$/],
   ['fapi.binance.com', /^\/(fapi\/v1\/(klines|exchangeInfo|ticker\/24hr|premiumIndex|openInterest|fundingRate|depth|aggTrades)|futures\/data\/(openInterestHist|globalLongShortAccountRatio))$/],
   ['www.okx.com', /^\/api\/v5\/(rubik\/stat\/contracts\/(open-interest-history|long-short-account-ratio-contract)|public\/(funding-rate|funding-rate-history|instruments|liquidation-orders))$/],
-  ['contract.mexc.com', /^\/api\/v1\/contract\/funding_rate$/],
+  ['contract.mexc.com', /^\/api\/v1\/contract\/(funding_rate|detail|ticker|kline\/[A-Z0-9_]+)$/],
   ['api.hbdm.com', /^\/linear-swap-api\/v1\/swap_batch_funding_rate$/],
   ['api-futures.kucoin.com', /^\/api\/v1\/contracts\/active$/],
   ['api.mexc.com', /^\/api\/v3\/(klines|ticker\/24hr|exchangeInfo)$/],

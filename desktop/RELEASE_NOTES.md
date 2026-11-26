@@ -1,4 +1,9 @@
-## New in 1.25.0
+## New in 1.26.0
+
+- **Stock, forex, metal and commodity perpetuals** from more exchanges: OKX, Bitget, Gate.io and MEXC Futures join Binance Futures and Hyperliquid (with funding, mark price and open interest), plus tokenized stocks (xStocks, Ondo) on spot exchanges.
+- **New search categories**: Stocks, Forex, Metals (gold, silver, platinum, palladium, copper, aluminum…) and Commodities, gathering every exchange. Exchange chips now list crypto only.
+
+## In 1.25.0
 
 - **Scale buttons** in each chart's bottom-right corner: % (percent / indexed to 100), L (logarithmic or arithmetic) and A (auto-fit).
 - **Percent from the last price** at the mouse: the price scale shows how far the price under the cursor is from the current price (tap on touch screens).

@@ -1829,10 +1829,11 @@
   const POPULAR_STOCKS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'TSLA', 'SPY', 'QQQ', 'EUR/USD', 'GBP/USD', 'USD/JPY'].map((x) => 'TD:' + x);
 
   async function openSymbolSearch(prefill = '', opts = {}) {
-    const input = h('input', { class: 'search', placeholder: 'Search crypto, stocks, ETFs and forex: BTC, AAPL, SPY, EUR/USD…', value: prefill, spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Search symbols' });
+    const input = h('input', { class: 'search', placeholder: 'Search crypto, stocks, forex and metals: BTC, AAPL, SPY, EUR/USD, gold…', value: prefill, spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Search symbols' });
     const list = h('div', { class: 'list' });
-    // where to search: everything, one crypto exchange, or stocks
-    const SOURCES = [['ALL', 'All'], ['BINANCE', 'Binance'], ...Object.values(MD.EXCHANGES).map((ex) => [ex.id, ex.name]), ['STOCKS', 'Stocks & forex']];
+    // where to search: everything, one crypto exchange (crypto only), or a kind of market on every source
+    const CATS = { STOCKS: 'stock', FOREX: 'forex', METALS: 'metal', COMMOD: 'commodity' };
+    const SOURCES = [['ALL', 'All'], ['STOCKS', 'Stocks'], ['FOREX', 'Forex'], ['METALS', 'Metals'], ['COMMOD', 'Commodities'], ['BINANCE', 'Binance'], ...Object.values(MD.EXCHANGES).map((ex) => [ex.id, ex.name])];
     let src = SOURCES.some(([k]) => k === state.searchSrc) && !PREVIEW ? state.searchSrc : 'ALL';
     const chips = h('div', { class: 'src-chips', role: 'tablist' }, SOURCES.map(([k, label]) => h('button', {
       class: 'chip' + (k === src ? ' on' : ''), 'data-src': k, role: 'tab', disabled: PREVIEW && k !== 'ALL' ? '' : null,
@@ -1847,7 +1848,7 @@
     const loadEx = () => {
       if (PREVIEW) return;
       for (const id of Object.keys(MD.EXCHANGES)) {
-        if (src !== 'ALL' && src !== id) continue;
+        if (src !== 'ALL' && src !== id && !CATS[src]) continue;
         if (exLists[id] || exProblems[id] === 'loading') continue;
         exProblems[id] = 'loading';
         MD.exPairs(id).then((l) => { exLists[id] = l; delete exProblems[id]; render(); }, (e) => { exProblems[id] = e.message; render(); });
@@ -1855,7 +1856,7 @@
     };
     const csvBtn = h('button', { class: 'btn', onclick: () => { csvTarget = opts.csv || 'main'; $('#csvInput').click(); } }, 'Import CSV…');
     const keyBtn = h('button', { class: 'btn', onclick: () => openStockSettings() }, state.stocks.key ? 'Stock data…' : 'Add stock data key…');
-    const hint = h('span', { class: 'muted' }, PREVIEW ? 'Preview: simulated data only. Download the app for live crypto, stocks and forex.' : state.stocks.key ? 'Crypto from Binance. Stocks, ETFs and forex from Twelve Data.' : 'Stocks, ETFs and forex need a free Twelve Data API key.');
+    const hint = h('span', { class: 'muted' }, PREVIEW ? 'Preview: simulated data only. Download the app for live crypto, stocks and forex.' : state.stocks.key ? 'Stock, forex and metal perpetuals from the crypto exchanges; exchange stock data from Twelve Data.' : 'Stock, forex and metal perpetuals are free. A free Twelve Data key adds real exchange stock and forex data.');
     if (PREVIEW) keyBtn.hidden = true;
     const title = opts.title || (slots.length > 1 && !state.sync.symbol ? `Symbol search · chart ${slots.indexOf(active) + 1}` : 'Symbol search');
     const { close } = openModal(title, h('div', {}, input, chips, list), { footer: [hint, keyBtn, csvBtn] });
@@ -1876,7 +1877,7 @@
       } else if (q) {
         crypto = crypto.concat(extraHits);
       }
-      crypto = crypto.filter((x) => !MD.isBStock(x)); // bStocks get their own group
+      crypto = crypto.filter((x) => !MD.isBStock(x) && MD.assetClass(x) === 'crypto'); // bStocks and gold tokens have their own groups
       // Binance bStocks (tokenized stocks: free and live)
       const BPOP = ['NVDA', 'TSLA', 'AAPL', 'SPY', 'QQQ', 'MSFT', 'GOOGL', 'AMZN', 'META', 'COIN'];
       let bpairs = raw ? MD.bStockList().filter((p) => MD.bStockTicker(p).startsWith(q)) : BPOP.map((t) => MD.bStockFor(t)).filter(Boolean);
@@ -1897,26 +1898,67 @@
       const isCoin = cryptoRows.some((x) => x.id === q || x.id === q + 'USDT' || x.id === q + 'USDC');
       const exactB = bRows.some((x) => MD.bStockTicker(x.id) === q);
       const stocksFirst = !isCoin && (exactB || (stockRows.length && (stockRows.some((x) => x.r.symbol === up) || !cryptoRows.some((x) => x.id.startsWith(q)))));
-      const bGroup = ['Stocks · Binance bStocks (free, live)', bRows], tdGroup = ['Stocks, ETFs & forex · Twelve Data', stockRows];
+      const bGroup = ['Stocks · Binance bStocks (free, live)', bRows];
+      const tdOf = (cls) => stockRows.filter((x) => MD.assetClass(x.id) === cls);
+      const tdGroup = ['Stocks & ETFs · Twelve Data', tdOf('stock')];
+      // stock, forex, metal and commodity markets on the crypto exchanges: perpetuals and tokenized stocks
+      const EX_ORDER = ['BINANCEF', 'HYPERLIQUID', 'BITGETF', 'OKXF', 'BYBITF', 'GATEF', 'MEXCF'];
+      const exRank = (id) => { const i = EX_ORDER.indexOf(id.split(':')[0]); return i < 0 ? 9 : i; };
+      const POP = { stock: ['NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMZN', 'META', 'GOOGL', 'SPY', 'QQQ', 'COIN', 'MSTR', 'HOOD', 'PLTR', 'AMD'], metal: ['XAU', 'GOLD', 'XAG', 'SILVER', 'XPT', 'PLATINUM', 'XPD', 'PALLADIUM', 'XCU', 'COPPER', 'XAL', 'ALUMINUM'], forex: [], commodity: [] };
+      const catRows = (cls, max) => {
+        const all = [];
+        for (const ex of Object.values(MD.EXCHANGES)) for (const p of exLists[ex.id] || []) if (p.cls === cls && !exclude(p.id)) all.push({ p, ex });
+        const U = raw.toUpperCase(), tick = (p) => p.base.replace(/^[A-Z]+\./, '');
+        let hits = all;
+        if (q) hits = all.filter(({ p }) => tick(p).startsWith(q) || p.key.startsWith(q) || (p.alt && p.alt.startsWith(q)) || (p.label && p.label.toUpperCase().includes(U)));
+        else if (POP[cls].length) { const pop = POP[cls]; hits = all.filter(({ p }) => pop.includes(tick(p))).sort((a, b) => pop.indexOf(tick(a.p)) - pop.indexOf(tick(b.p))); }
+        const score = ({ p }) => (q && (tick(p) === q || p.alt === q) ? 0 : 1);
+        if (q || !POP[cls].length) hits.sort((a, b) => score(a) - score(b) || (q ? 0 : (a.p.label || tick(a.p)).localeCompare(b.p.label || tick(b.p))) || tick(a.p).length - tick(b.p).length || exRank(a.p.id) - exRank(b.p.id));
+        else hits.sort((a, b) => POP[cls].indexOf(tick(a.p)) - POP[cls].indexOf(tick(b.p)) || exRank(a.p.id) - exRank(b.p.id));
+        return hits.slice(0, max).map(({ p, ex }) => ({ id: p.id, kind: 'ex', ex, p }));
+      };
+      const loadingNote = () => (Object.keys(MD.EXCHANGES).some((id) => !exLists[id] && exProblems[id] === 'loading') ? 'Loading the exchanges’ markets…' : null);
+      const max = CATS[src] ? 80 : 8;
+      const perpGroup = (cls, label) => { const rows = catRows(cls, max); return [label, rows, !rows.length && CATS[src] ? loadingNote() || `Nothing found for "${raw}".` : null]; };
+      const POP_TD = { forex: ['EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'USD/CHF', 'USD/CAD'], metal: ['XAU/USD', 'XAG/USD', 'XPT/USD', 'XPD/USD'] };
+      const tdCat = (cls, label) => {
+        let rows = tdOf(cls);
+        if (!raw && POP_TD[cls]) rows = POP_TD[cls].map((x) => ({ id: 'TD:' + x, kind: 'stock', r: { id: 'TD:' + x, symbol: x, name: null, exchange: 'Forex', type: cls === 'metal' ? 'Metal' : 'Forex', us: true } }));
+        return [label, rows.filter((x) => !exclude(x.id))];
+      };
+      const catGroups = {
+        stock: () => [...(state.stocks.key ? [tdGroup, bGroup] : [bGroup, tdGroup]), perpGroup('stock', 'Stocks · perpetuals and tokenized stocks on crypto exchanges')],
+        forex: () => [perpGroup('forex', 'Forex · perpetuals on crypto exchanges'), tdCat('forex', 'Forex · Twelve Data')],
+        metal: () => [perpGroup('metal', 'Metals · perpetuals and gold tokens'), tdCat('metal', 'Metals · Twelve Data')],
+        commodity: () => [perpGroup('commodity', 'Commodities · perpetuals on crypto exchanges'), tdCat('commodity', 'Commodities · Twelve Data')],
+      };
       // with a Twelve Data key the real exchange data comes first; without one, the free bStocks do
-      const stockGroups = state.stocks.key ? [tdGroup, bGroup] : [bGroup, tdGroup];
+      const stockGroups = catGroups.stock();
       // Bybit, KuCoin, Kraken, Coinbase
       const exGroups = [];
       for (const ex of Object.values(MD.EXCHANGES)) {
         if (src !== 'ALL' && src !== ex.id) continue;
         if (src === 'ALL' && !q) continue; // "All" lists other exchanges once you type
         const l = exLists[ex.id];
-        const rows = l ? MD.searchPairs(l, raw).filter((p) => !exclude(p.id)).slice(0, src === 'ALL' ? 4 : 60).map((p) => ({ id: p.id, kind: 'ex', ex })) : [];
+        const rows = l ? MD.searchPairs(l.filter((p) => !p.cls), raw).filter((p) => !exclude(p.id)).slice(0, src === 'ALL' ? 4 : 60).map((p) => ({ id: p.id, kind: 'ex', ex })) : []; // (crypto only: the rest is under Stocks, Forex, Metals, Commodities)
         const gname = ex.futures ? `Perpetual futures · ${ex.name.replace(/ Futures$/, '')}` : `Crypto · ${ex.name}`;
         if (rows.length) exGroups.push([gname, rows]);
         else if (src === ex.id) exGroups.push([gname, [], exProblems[ex.id] === 'loading' || !l ? (exProblems[ex.id] && exProblems[ex.id] !== 'loading' ? exProblems[ex.id] : `Loading ${ex.name} symbols…`) : `Nothing found on ${ex.name} for "${raw}".`]);
       }
       const binGroup = ['Crypto · Binance', cryptoRows];
       let groups;
-      if (src === 'BINANCE') groups = [binGroup, bGroup];
-      else if (src === 'STOCKS') groups = stockGroups;
+      if (src === 'BINANCE') groups = [binGroup]; // (bStocks are under Stocks)
+      else if (CATS[src]) groups = catGroups[CATS[src]]();
       else if (src !== 'ALL') groups = exGroups;
-      else groups = stocksFirst ? [...stockGroups, binGroup, ...exGroups] : [binGroup, ...exGroups, ...stockGroups];
+      else {
+        // "All": crypto, then (once you type) the other kinds of market
+        const more = q ? [...catGroups.metal(), ...catGroups.forex(), ...catGroups.commodity()].map((g) => [g[0], g[1]]) : [];
+        // an exact name (XAU, GOLD, EURUSD, CL) puts its kind of market first
+        const exact = more.filter((g) => g[1].some((r) => r.p && (r.p.base.replace(/^[A-Z]+\./, '') === q || r.p.alt === q || (r.p.label || '').toUpperCase() === raw.toUpperCase())));
+        const rest = more.filter((g) => !exact.includes(g));
+        groups = exact.length ? [...exact, binGroup, ...exGroups, ...stockGroups, ...rest] : stocksFirst ? [...stockGroups, binGroup, ...exGroups, ...rest] : [binGroup, ...exGroups, ...stockGroups, ...rest];
+        groups = groups.map((g) => [g[0], g[1], src === 'ALL' ? null : g[2]]);
+      }
       items = [];
       list.innerHTML = '';
       for (const [label, rows, note] of groups) {
@@ -1928,7 +1970,10 @@
           items.push(row);
           let detail;
           if (row.kind === 'crypto') detail = isDemo(row.id) ? 'Demo feed' : row.id.startsWith('CSV:') ? 'Imported CSV' : 'Crypto · Binance';
-          else if (row.kind === 'ex') detail = row.ex.futures ? `Perpetual future · ${row.ex.name}` : `Crypto · ${row.ex.name}`;
+          else if (row.kind === 'ex' && row.p && row.p.cls) {
+            const kind = { stock: 'Stock', forex: 'Forex', metal: 'Metal', commodity: 'Commodity' }[row.p.cls];
+            detail = `${row.p.label ? row.p.label + ' · ' : ''}${row.ex.futures ? `${kind} perpetual` : row.p.cls === 'stock' ? 'Tokenized stock' : `${kind} token`} · ${row.ex.name.replace(/ Futures$/, '')}`;
+          } else if (row.kind === 'ex') detail = row.ex.futures ? `Perpetual future · ${row.ex.name}` : `Crypto · ${row.ex.name}`;
           else if (row.kind === 'bstock') {
             const t = MD.bStockTicker(row.id), named = stockHits.find((r) => r.us && r.symbol.replace(/[^A-Z0-9]/g, '') === t);
             detail = `${named ? named.name : 'Tokenized ' + t} · bStock · free, live`;

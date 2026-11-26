@@ -180,6 +180,28 @@ timeframe (custom ones too), indicators, watchlist, comparisons, alerts.
   say so.
 - If the live feed stops (some networks block it), Candela switches to refreshing every 4 seconds.
 
+### Stocks, forex, metals and commodities on crypto exchanges
+
+Many crypto exchanges list **perpetuals that track stocks, ETFs, stock indices, currencies, metals and
+energy** (USDT-settled, trading around the clock), and some list **tokenized stocks** (xStocks such as
+TSLAX, Ondo tokens such as TSLAON). Candela charts them all, live and free, from Binance Futures,
+Hyperliquid (HIP-3 markets), Bitget, OKX, Gate.io and MEXC Futures (MEXC needs the Windows app or
+`node server.js`), with funding, mark and index price and open interest under the title.
+
+The symbol search sorts every market by kind:
+
+- **Stocks**: Binance bStocks, Twelve Data stocks and ETFs (with a key), stock, ETF and index
+  perpetuals, and tokenized stocks.
+- **Forex**: currency perpetuals (EURUSD, USDJPY, DXY…) and Twelve Data forex.
+- **Metals**: gold, silver, platinum, palladium, copper and aluminum (plus nickel, lead, zinc, and gold
+  ETFs and gold tokens such as PAXG and XAUT) from every exchange that lists them, and Twelve Data's metals.
+  Search "gold" or "XAU" either way.
+- **Commodities**: crude oil (WTI, Brent) and natural gas.
+- The exchange chips (Binance, Bitget Futures, Hyperliquid…) list crypto only.
+
+These perpetuals are derivatives priced by each exchange, not shares or the metal itself: they track the
+real market but can drift from it, especially when the real market is closed.
+
 ### Hyperliquid
 
 Pick the *Hyperliquid* chip in the symbol search for its perpetuals, or *Hyperliquid Spot* for spot pairs

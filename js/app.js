@@ -248,6 +248,12 @@
       c.onNeedHistory = () => this.loadOlder();
       c.onContextMenu = (info) => showContextMenu(this, info);
       c.onTradeLineMove = (l, price) => paperLineMoved(this, l, price);
+      // the scale buttons in the chart's corner act on this chart, like the ones in the top bar
+      c.onScaleAction = (act) => {
+        setActive(this);
+        if (act === 'auto') { c.main.auto = true; c.invalidate(); return; }
+        $(act === 'log' ? '#logBtn' : '#pctBtn').click();
+      };
       c.askText = (v) => askText('Text note', v, 'Type your note');
       c.onCrosshairMove = (t) => {
         if (!state.sync.crosshair) return;
@@ -4046,6 +4052,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     form.appendChild(h('div', { class: 'list-group' }, 'Price scale'));
     check('lastLine', 'Last price line');
     check('countdown', 'Countdown to the candle close');
+    check('hoverPct', 'Percent from the last price at the mouse');
     form.appendChild(h('div', { class: 'list-group' }, 'Time'));
     const zone = h('select', {}, ZONES.map(([v, label]) => h('option', { value: v }, label)));
     zone.value = state.timeZone || 'local';

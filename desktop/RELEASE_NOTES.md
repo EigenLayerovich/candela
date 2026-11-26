@@ -1,4 +1,9 @@
-## New in 1.24.0
+## New in 1.25.0
+
+- **Scale buttons** in each chart's bottom-right corner: % (percent / indexed to 100), L (logarithmic or arithmetic) and A (auto-fit).
+- **Percent from the last price** at the mouse: the price scale shows how far the price under the cursor is from the current price (tap on touch screens).
+
+## In 1.24.0
 
 - **Order book and trades for Binance, Binance Futures, Bybit and Bybit Futures** charts (Book button), like Hyperliquid's: live book with grouping, depth and bid/ask balance; every trade with big ones highlighted.
 

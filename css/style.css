@@ -860,3 +860,9 @@ kbd { display: inline-block; font: 600 11px/1 inherit; padding: 3px 6px; border:
 .al-extra select, .al-extra input { min-width: 0; height: 30px; }
 .al-and { font-size: 11.5px; text-align: center; }
 .al-add { display: flex; }
+
+/* ---- scale buttons under the price axis (percent, log, auto) */
+.scale-corner { position: absolute; right: 0; bottom: 0; width: 74px; height: 28px; display: flex; align-items: center; justify-content: center; gap: 2px; z-index: 3; }
+.scale-corner button { min-width: 20px; height: 20px; padding: 0 3px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font: 600 11px/1 var(--font); cursor: pointer; }
+.scale-corner button:hover { background: var(--panel-2); color: var(--text); }
+.scale-corner button.on { background: var(--accent-soft); color: var(--accent); }

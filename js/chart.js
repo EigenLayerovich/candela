@@ -285,6 +285,20 @@
       this.legendLayer.className = 'legend-layer';
       el.appendChild(this.canvas);
       el.appendChild(this.legendLayer);
+      this.onScaleAction = () => {};
+      this.corner = document.createElement('div');
+      this.corner.className = 'scale-corner';
+      for (const [act, label, title] of [['pct', '%', 'Percent scale (click again: indexed to 100)'], ['log', 'L', 'Logarithmic scale (off: arithmetic)'], ['auto', 'A', 'Auto-fit the price scale']]) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.dataset.act = act;
+        b.textContent = label;
+        b.title = title;
+        b.addEventListener('pointerdown', (e) => e.stopPropagation());
+        b.addEventListener('click', (e) => { e.stopPropagation(); this.onScaleAction(act); });
+        this.corner.appendChild(b);
+      }
+      el.appendChild(this.corner);
 
       this.themeName = 'dark';
       this.theme = THEMES.dark;
@@ -1095,7 +1109,20 @@
     }
 
     // ------------------------------------------------------------------ rendering
+    // which corner buttons are on (checked every frame; only touches the DOM when something changed)
+    _syncCorner() {
+      const key = `${this.pctActive() ? (this.indexMode ? 'i' : 'p') : ''}|${this.main.log ? 1 : 0}|${this.main.auto ? 1 : 0}`;
+      if (key === this._cornerKey) return;
+      this._cornerKey = key;
+      for (const b of this.corner.children) {
+        const on = b.dataset.act === 'pct' ? this.pctActive() : b.dataset.act === 'log' ? !!this.main.log : !!this.main.auto;
+        b.classList.toggle('on', on);
+        if (b.dataset.act === 'pct') b.textContent = this.pctActive() && this.indexMode ? '100' : '%';
+        if (b.dataset.act === 'log') b.title = this.main.log ? 'Logarithmic scale on (click for arithmetic)' : 'Arithmetic scale (click for logarithmic)';
+      }
+    }
     _render() {
+      this._syncCorner();
       const ctx = this.ctx, d = window.devicePixelRatio || 1, T = this.theme;
       ctx.setTransform(d, 0, 0, d, 0, 0);
       ctx.fillStyle = T.bg;
@@ -1712,6 +1739,17 @@
       }
       if (this.hover && this.hover.pane === p && !this.drag) {
         this._axisLabel(this.hover.y, this._fmtAxis(p, this.vOf(p, this.hover.y), step), T.crossLabel, '#fff', p);
+        // how far the price under the mouse (or finger) is from the latest price, in percent
+        const R = this.raw, last = R.length ? R[R.length - 1].c : null;
+        if (p === this.main && !this._base && last > 0 && LOOK.hoverPct !== false) {
+          const v = this.vOf(p, this.hover.y), q = (v / last - 1) * 100, h = 16, x = this.plotW + 1;
+          const below = this.hover.y + 9 + h <= p.top + p.h, y0 = below ? Math.round(this.hover.y + 9) : Math.round(this.hover.y - 9 - h);
+          ctx.fillStyle = q >= 0 ? T.up : T.down;
+          ctx.fillRect(x, y0, this.axisW - 1, h);
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'left';
+          ctx.fillText(`${q >= 0 ? '+' : '−'}${Math.abs(q).toFixed(Math.abs(q) >= 100 ? 1 : 2)}%`, x + 7, y0 + h / 2 + 0.5);
+        }
       }
       ctx.restore();
     }
@@ -2002,6 +2040,13 @@
       const pos = (e) => { const r = c.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 
       c.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'touch') {
+          const { x, y } = pos(e), reg = this._region(x, y);
+          this.hover = { x, y, pane: reg.r === 'plot' || reg.r === 'price' ? reg.p : null };
+          this._touchHover = true;
+          this._updateLegendValues();
+          this.invalidate();
+        }
         if (e.button !== 0) return;
         const { x, y } = pos(e), reg = this._region(x, y);
         c.setPointerCapture(e.pointerId);
@@ -2215,8 +2260,8 @@
       };
       c.addEventListener('pointerup', end);
       c.addEventListener('pointercancel', end);
-      c.addEventListener('pointerleave', () => {
-        if (this.drag) return;
+      c.addEventListener('pointerleave', (e) => {
+        if (this.drag || e.pointerType === 'touch') return; // a tapped crosshair stays until the next tap
         this.hover = null;
         this._updateLegendValues();
         this._emitCrosshair(null);

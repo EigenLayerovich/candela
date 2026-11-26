@@ -434,6 +434,12 @@ with the live price until the day closes, as on other charting apps. It works fo
 
 - **Undo / redo** (`Ctrl+Z`, `Ctrl+Y` or `Ctrl+Shift+Z`, or the arrows at the top): drawings and indicators,
   per chart.
+- **Scale buttons** in each chart's bottom-right corner, under the price scale: **%** (percent scale; again
+  for indexed to 100), **L** (logarithmic; off means arithmetic) and **A** (auto-fit the price scale again
+  after you dragged it). They match the % and log buttons at the top.
+- **Percent from the last price**: while you move the mouse over a chart, the price scale shows the price
+  under the cursor and, below it, how far that is from the latest price (green above, red below). On a
+  touch screen, tap the chart. It can be turned off in Chart settings.
 - **Object tree** (list button in the left toolbar): every indicator and drawing on the chart. Show or hide,
   lock, delete, open an indicator's settings, or click a drawing to jump to it.
 - **Bottom bar**: date ranges **1D 5D 1M 3M 6M YTD 1Y 5Y All** (each picks a fitting timeframe and loads

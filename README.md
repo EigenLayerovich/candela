@@ -197,7 +197,8 @@ Pick the *Hyperliquid* chip in the symbol search for its perpetuals, or *Hyperli
   candles.
 - Watchlist, comparisons, *Across exchanges* ("Hyperliquid perp" and "Hyperliquid spot"), alerts (also on
   the alert server), paper trading and every indicator work as on the other exchanges.
-- **Order book and trades**: on a Hyperliquid chart the **Book** button (top bar) opens a column next to
+- **Order book and trades** (also on Binance, Binance Futures, Bybit and Bybit Futures charts, see *Order book
+  and trades* below): on a Hyperliquid chart the **Book** button (top bar) opens a column next to
   the chart with the live order book (12 levels a side, sizes, running totals and depth bars, the spread,
   and the bid/ask balance; group prices by 1, 2, 5, 10, 100…) and a **Trades** tab with every trade as it
   happens (buys green, sells red, big trades highlighted from a size you pick, and the last minute's buy
@@ -379,6 +380,17 @@ so the last candle of each day is shorter. Stocks and forex can use custom timef
   (CHoCH).
 
 These are Candela's own versions of widely used ideas; settings and colors are in each indicator's dialog.
+
+## Order book and trades
+
+The **Book** button (top bar) opens a column next to the chart with the live **order book** and **trades** on
+Binance (spot), Binance Futures, Bybit, Bybit Futures and Hyperliquid, plus **liquidations** for any crypto
+coin. The book shows 12 levels a side with sizes, running totals and depth bars, the spread and the bid/ask
+balance; group prices by 1, 2, 5, 10, 100… (on Binance the book is kept from a 1,000-level snapshot plus live
+changes, on Bybit 200 levels). Trades show each fill as it happens (buys green, sells red, big ones
+highlighted from a size you pick) and the last minute's buy and sell volume. Click a price in the book to
+place a paper order there. Where Binance Futures can't be reached for the full snapshot, the book shows
+the top 20 levels instead.
 
 ## Derivatives data and the Market window
 

@@ -487,8 +487,8 @@ const publicSettings = () => ({
 // ---------------------------------------------------------------------- HTTP
 const PROXY_ALLOW = [
   ['api.kucoin.com', /^\/api\/v[12]\/(market\/(candles|stats|allTickers|orderbook\/level1)|symbols)$/],
-  ['api.bybit.com', /^\/v5\/market\/(kline|tickers|instruments-info|open-interest|account-ratio|funding\/history)$/],
-  ['fapi.binance.com', /^\/(fapi\/v1\/(klines|exchangeInfo|ticker\/24hr|premiumIndex|openInterest|fundingRate)|futures\/data\/(openInterestHist|globalLongShortAccountRatio))$/],
+  ['api.bybit.com', /^\/v5\/market\/(kline|tickers|instruments-info|open-interest|account-ratio|funding\/history|recent-trade)$/],
+  ['fapi.binance.com', /^\/(fapi\/v1\/(klines|exchangeInfo|ticker\/24hr|premiumIndex|openInterest|fundingRate|depth|aggTrades)|futures\/data\/(openInterestHist|globalLongShortAccountRatio))$/],
   ['www.okx.com', /^\/api\/v5\/(rubik\/stat\/contracts\/(open-interest-history|long-short-account-ratio-contract)|public\/(funding-rate|funding-rate-history|instruments|liquidation-orders))$/],
   ['contract.mexc.com', /^\/api\/v1\/contract\/funding_rate$/],
   ['api.hbdm.com', /^\/linear-swap-api\/v1\/swap_batch_funding_rate$/],

@@ -829,10 +829,166 @@
   }
   const setProxy = (base, token = '') => { proxyBase = base; proxyToken = token; };
 
+
+  // ---------------------------------------------------------------- order books and trades (Binance, Bybit)
+  // A book is kept as two price → size maps, built from a snapshot and live changes, and handed out grouped:
+  // the price step is the mid price rounded to `sigFigs` significant figures (× `mantissa`), as on Hyperliquid.
+  const newBook = () => ({ bids: new Map(), asks: new Map() });
+  function setLevels(map, levels) { for (const [p, q] of levels) { const px = +p, sz = +q; if (sz > 0) map.set(px, sz); else map.delete(px); } }
+  function groupedBook(st, { sigFigs = 5, mantissa = null } = {}, n = 20) {
+    const bids = [...st.bids.entries()].sort((x, y) => y[0] - x[0]), asks = [...st.asks.entries()].sort((x, y) => x[0] - y[0]);
+    if (!bids.length || !asks.length) return null;
+    const mid = (bids[0][0] + asks[0][0]) / 2, tick = Math.pow(10, Math.floor(Math.log10(mid)) - sigFigs + 1) * (sigFigs === 5 && mantissa ? mantissa : 1);
+    const group = (list, down) => {
+      const out = [];
+      for (const [px, sz] of list) {
+        const k = +((down ? Math.floor(px / tick + 1e-9) : Math.ceil(px / tick - 1e-9)) * tick).toPrecision(12), last = out[out.length - 1];
+        if (last && last[0] === k) { last[1] += sz; last[2]++; continue; }
+        if (out.length >= n) break;
+        out.push([k, sz, 1]);
+      }
+      return out;
+    };
+    return { bids: group(bids, true), asks: group(asks, false), t: Date.now() };
+  }
+  // hand the grouped book out at most 5 times a second
+  function bookEmitter(st, opts, onBook) {
+    let timer = null;
+    return {
+      emit() { if (!timer) timer = setTimeout(() => { timer = null; const g = groupedBook(st, opts); if (g) onBook(g); }, 200); },
+      stop() { clearTimeout(timer); },
+    };
+  }
+
+  // Binance (spot and USDⓈ-M futures): a 1,000-level snapshot plus the change stream, checked for gaps
+  // (a gap means a new snapshot). Where the snapshot is blocked, the 20-level stream is used instead.
+  function binanceBook({ wsDiff, wsTop, snapshot, futures, name }, opts, onBook, onStatus) {
+    const st = newBook(), out = bookEmitter(st, opts, onBook);
+    let stopped = false, ready = false, synced = false, lastU = 0, buffer = [], stopWs = null, loading = false;
+    const apply = (ev) => {
+      if (ev.u <= lastU) return true;
+      const ok = synced ? (futures ? ev.pu === lastU : ev.U === lastU + 1) : futures ? ev.U <= lastU && ev.u >= lastU : ev.U <= lastU + 1 && ev.u >= lastU + 1;
+      if (!ok) return false;
+      setLevels(st.bids, ev.b);
+      setLevels(st.asks, ev.a);
+      lastU = ev.u;
+      synced = true;
+      return true;
+    };
+    const resync = async () => {
+      if (loading || stopped) return;
+      loading = true; ready = false; synced = false;
+      try {
+        const snap = await snapshot();
+        if (stopped) return;
+        st.bids.clear(); st.asks.clear();
+        setLevels(st.bids, snap.bids); setLevels(st.asks, snap.asks);
+        lastU = snap.lastUpdateId;
+        ready = true;
+        const queued = buffer; buffer = [];
+        for (const ev of queued) if (!apply(ev)) { loading = false; return resync(); }
+        out.emit();
+      } catch (e) {
+        if (stopped) return;
+        // no snapshot here (blocked, or a web page without Candela's server): the top 20 levels, refreshed by the exchange
+        if (stopWs) stopWs();
+        stopWs = socket(wsTop, {
+          onOpen: () => {},
+          onMessage: (m) => { const b = m.bids || m.b, a = m.asks || m.a; if (!b || !a) return; st.bids.clear(); st.asks.clear(); setLevels(st.bids, b); setLevels(st.asks, a); out.emit(); },
+          onStatus,
+        });
+      } finally { loading = false; }
+    };
+    stopWs = socket(wsDiff, {
+      onOpen: () => { synced = false; buffer = []; resync(); },
+      onMessage: (ev) => {
+        if (ev.e !== 'depthUpdate') return;
+        if (!ready) { buffer.push(ev); if (buffer.length > 500) buffer.shift(); return; }
+        if (!apply(ev)) { buffer = [ev]; resync(); return; }
+        out.emit();
+      },
+      onStatus,
+    });
+    void name;
+    return () => { stopped = true; out.stop(); if (stopWs) stopWs(); };
+  }
+  // Binance trades: the latest ones first, then each one live (aggregated: one row per taker order and price)
+  function binanceTrades({ ws, recent }, onTrades, onStatus) {
+    let stopped = false, stop = null;
+    const row = (x) => ({ t: x.T, px: +x.p, sz: +x.q, buy: !x.m, id: x.a });
+    recent().then((r) => { if (!stopped && Array.isArray(r)) onTrades(r.map(row)); }, () => {});
+    stop = socket(ws, { onOpen: () => {}, onMessage: (m) => { if (m.e === 'aggTrade') onTrades([row(m)]); }, onStatus });
+    return () => { stopped = true; stop(); };
+  }
+  const BV_REST = 'https://data-api.binance.vision', BV_WS = 'wss://data-stream.binance.vision/ws/';
+  const binanceSpotFlow = (sym) => ({
+    book: (opts, onBook, onStatus) => binanceBook({
+      wsDiff: `${BV_WS}${sym.toLowerCase()}@depth@100ms`, wsTop: `${BV_WS}${sym.toLowerCase()}@depth20@100ms`,
+      snapshot: () => get({ name: 'Binance', cors: true }, `${BV_REST}/api/v3/depth?symbol=${sym}&limit=1000`), futures: false,
+    }, opts, onBook, onStatus),
+    trades: (onTrades, onStatus) => binanceTrades({ ws: `${BV_WS}${sym.toLowerCase()}@aggTrade`, recent: () => get({ name: 'Binance', cors: true }, `${BV_REST}/api/v3/aggTrades?symbol=${sym}&limit=100`) }, onTrades, onStatus),
+  });
+  // Bybit (spot and perpetuals): a 200-level snapshot, then changes, on one WebSocket
+  function bybitBook(ex, b, q, opts, onBook, onStatus) {
+    const st = newBook(), out = bookEmitter(st, opts, onBook);
+    let stop = null, stopped = false;
+    ex.symbol(b, q).then((name) => {
+      if (stopped) return;
+      const topic = `orderbook.200.${name}`;
+      stop = socket(`wss://stream.bybit.com/v5/public/${ex.futures ? 'linear' : 'spot'}`, {
+        onOpen: (send) => send({ op: 'subscribe', args: [topic] }),
+        onMessage: (m) => {
+          if (m.topic !== topic || !m.data) return;
+          if (m.type === 'snapshot') { st.bids.clear(); st.asks.clear(); }
+          setLevels(st.bids, m.data.b || []);
+          setLevels(st.asks, m.data.a || []);
+          out.emit();
+        },
+        onStatus, ping: { every: 20000, msg: { op: 'ping' } },
+      });
+    });
+    return () => { stopped = true; out.stop(); if (stop) stop(); };
+  }
+  function bybitTrades(ex, b, q, onTrades, onStatus) {
+    let stop = null, stopped = false;
+    const cat = ex.futures ? 'linear' : 'spot', row = (x) => ({ t: +(x.T || x.time), px: +(x.p || x.price), sz: +(x.v || x.size), buy: (x.S || x.side) === 'Buy', id: x.i || x.execId });
+    ex.symbol(b, q).then(async (name) => {
+      if (stopped) return;
+      try { const j = await get(ex, `${ex.rest}/v5/market/recent-trade?category=${cat}&symbol=${name}&limit=100`); if (!stopped && j.retCode === 0) onTrades((j.result.list || []).map(row).sort((x, y) => x.t - y.t)); } catch (e) { /* the stream still comes */ }
+      if (stopped) return;
+      const topic = `publicTrade.${name}`;
+      stop = socket(`wss://stream.bybit.com/v5/public/${cat}`, {
+        onOpen: (send) => send({ op: 'subscribe', args: [topic] }),
+        onMessage: (m) => { if (m.topic === topic && Array.isArray(m.data)) onTrades(m.data.map(row)); },
+        onStatus, ping: { every: 20000, msg: { op: 'ping' } },
+      });
+    });
+    return () => { stopped = true; if (stop) stop(); };
+  }
+  for (const ex of [BYBIT, BYBITF]) {
+    ex.book = (b, q, opts, onBook, onStatus) => bybitBook(ex, b, q, opts, onBook, onStatus);
+    ex.trades = (b, q, onTrades, onStatus) => bybitTrades(ex, b, q, onTrades, onStatus);
+  }
+  BINANCEF.book = (b, q, opts, onBook, onStatus) => binanceBook({
+    wsDiff: `wss://fstream.binance.com/public/ws/${(b + q).toLowerCase()}@depth@100ms`, wsTop: `wss://fstream.binance.com/public/ws/${(b + q).toLowerCase()}@depth20@100ms`,
+    snapshot: () => get(BINANCEF, `${BINANCEF.rest}/fapi/v1/depth?symbol=${b}${q}&limit=1000`), futures: true,
+  }, opts, onBook, onStatus);
+  BINANCEF.trades = (b, q, onTrades, onStatus) => binanceTrades({
+    ws: `wss://fstream.binance.com/market/ws/${(b + q).toLowerCase()}@aggTrade`, recent: () => get(BINANCEF, `${BINANCEF.rest}/fapi/v1/aggTrades?symbol=${b}${q}&limit=100`),
+  }, onTrades, onStatus);
+  // the order book and trades of any symbol that has them: { unit, book(opts, onBook, onStatus), trades(onTrades, onStatus) }
+  function flowFor(sym) {
+    const s = parse(sym);
+    if (s) return s.ex.book && s.ex.trades ? { unit: s.b.replace(/^[A-Z]+\./, ''), book: (o, cb, st) => s.ex.book(s.b, s.q, o, cb, st), trades: (cb, st) => s.ex.trades(s.b, s.q, cb, st) } : null;
+    if (MD.isStock(sym) || /^(CSV:|DEMO)/.test(sym || '')) return null;
+    const bq = splitBinance(sym);
+    return bq ? { unit: bq.base, ...binanceSpotFlow(sym) } : null;
+  }
+
   // for other modules (derivatives data): a GET with the same CORS fallback, and Hyperliquid's info endpoint
   const getJSON = (url, name, cors = 'unknown') => get({ name, cors }, url);
   const hlInfo = (body) => hlPost(HYPERLIQUID, body);
-  Object.assign(MD, { EXCHANGES, exchangeOf, exDisplay, displayName, exPairs: pairs, searchPairs, samePairs, baseQuote, ticker, setProxy, getJSON, hlInfo, exSocket: socket });
+  Object.assign(MD, { flowFor, EXCHANGES, exchangeOf, exDisplay, displayName, exPairs: pairs, searchPairs, samePairs, baseQuote, ticker, setProxy, getJSON, hlInfo, exSocket: socket });
   MD.registerSource((sym) => !!parse(sym), {
     tfs: (sym) => Object.keys(parse(sym).ex.tfs),
     history: (sym, tf, opts) => { const s = parse(sym); return s.ex.history(s.b, s.q, tf, opts); },

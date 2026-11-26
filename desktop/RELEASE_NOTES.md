@@ -1,4 +1,8 @@
-## New in 1.23.0
+## New in 1.24.0
+
+- **Order book and trades for Binance, Binance Futures, Bybit and Bybit Futures** charts (Book button), like Hyperliquid's: live book with grouping, depth and bid/ask balance; every trade with big ones highlighted.
+
+## In 1.23.0
 
 - **46 more indicators (124 in all)**: KDJ, Squeeze Momentum, WaveTrend, QQE, HalfTrend, Range Filter, ATR Trailing Stop, Chande Kroll Stop, Volatility Stop, RSI Divergence, Kernel Regression Envelope, Linear Regression Channel, Trading Sessions and ICT killzones, Volume Profile per day/week/month, Ulcer Index, Klinger, PVO, Williams Vix Fix and more.
 - **Alerts with several conditions**: "+ Add condition" in the alert dialog; all true at once, or any one.

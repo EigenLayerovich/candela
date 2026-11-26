@@ -3110,7 +3110,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   // ---- Order book and trades (side panel), for exchanges that stream them (Hyperliquid)
   state.flow = { open: true, tab: 'book', group: 0, usd: false, big: 50000, ...state.flow };
   const flow = { liqs: [], liqKey: null, stopLiq: null, sym: null, hasBook: false, key: null, stopBook: null, stopTrades: null, book: null, trades: [], timer: null, status: '', ex: null, b: null, q: null, mid: null };
-  const flowSupported = (sym) => { const ex = exOf(sym); return !!(ex && ex.book && ex.trades); };
+  const flowSupported = (sym) => !!MD.flowFor(sym);
   // price groupings offered for the current price: [sigFigs, mantissa, tick]
   function flowGroups(px) {
     if (!(px > 0)) return [[5, null, null]];
@@ -3132,6 +3132,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     $('#bookBtn').hidden = !ok;
     $('#bookBtn').classList.toggle('active', !!(ok && state.flow.open));
     $('#bookBtn').title = hasBook ? 'Order book, trades and liquidations' : 'Liquidations (Binance, Bybit, OKX)';
+    if (flow.sym && flow.sym !== sym) { flow.mid = null; } // another price range: the grouping list starts again
     const run = ok && state.flow.open && !document.hidden;
     flow.hasBook = hasBook;
     // liquidations: one stream per coin
@@ -3157,11 +3158,11 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     flow.sym = run ? sym : null;
     if (!run) return;
     if (!key) { flow.book = null; flow.trades = []; flow.mid = null; renderFlow(); return; }
-    const s = MD.exchangeOf(sym), [, b, q] = /^[A-Z]+:([^/]+)\/(.+)$/.exec(sym);
-    flow.key = key; flow.ex = s; flow.b = b; flow.q = q;
+    const src = MD.flowFor(sym);
+    flow.key = key; flow.b = src.unit;
     if (!sameSym) { flow.book = null; flow.trades = []; flow.mid = null; }
     flow.status = 'connecting';
-    flow.stopBook = s.book(b, q, { sigFigs: g[0], mantissa: g[1] }, (bk) => {
+    flow.stopBook = src.book({ sigFigs: g[0], mantissa: g[1] }, (bk) => {
       flow.book = bk;
       const mid = bk.bids[0] && bk.asks[0] ? (bk.bids[0][0] + bk.asks[0][0]) / 2 : null;
       // the first book tells the price, so the grouping list can be filled in
@@ -3170,7 +3171,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       flowSoon();
     }, (st, msg) => { flow.status = msg || st; flowSoon(); });
     if (!sameSym || !flow.stopTrades) {
-      flow.stopTrades = s.trades(b, q, (list) => {
+      flow.stopTrades = src.trades((list) => {
         flow.trades.push(...list);
         if (flow.trades.length > 400) flow.trades.splice(0, flow.trades.length - 400);
         flowSoon();

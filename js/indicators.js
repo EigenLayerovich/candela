@@ -1355,6 +1355,601 @@
   ];
   for (const d of DERIVS) DEFS.push(d);
 
+  // ================================================================ 1.23: classic, community-style and session indicators
+  const INT = (key, label, def, min = 1, max = 2000) => ({ key, label, type: 'int', def, min, max });
+  const FLT = (key, label, def, step = 0.1, min = 0) => ({ key, label, type: 'float', def, min, step });
+  const SEL = (key, label, options, def) => ({ key, label, type: 'select', options, def: def || options[0] });
+  const H_ = (bars) => bars.map((b) => b.h), L_ = (bars) => bars.map((b) => b.l), O_ = (bars) => bars.map((b) => b.o);
+  const HLC3 = (bars) => bars.map((b) => (b.h + b.l + b.c) / 3);
+  const zip = (a, b, f) => a.map((v, i) => f(v, b[i], i));
+  const div = (a, b, k = 1) => a.map((v, i) => (b[i] ? (k * v) / b[i] : NaN));
+  const median = (arr) => { const s = arr.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  function rollMedian(a, n) { return a.map((_, i) => (i >= n - 1 ? median(a.slice(i - n + 1, i + 1)) : NaN)); }
+  // swing highs / lows confirmed `r` bars later: [index, value] lists
+  function pivotsOf(arr, l, r, high) {
+    const out = [];
+    for (let i = l; i < arr.length - r; i++) {
+      let ok = true;
+      for (let k = i - l; k <= i + r && ok; k++) if (k !== i && (high ? arr[k] > arr[i] || (k > i && arr[k] === arr[i]) : arr[k] < arr[i] || (k > i && arr[k] === arr[i]))) ok = false;
+      if (ok) out.push(i);
+    }
+    return out;
+  }
+  const PAL4 = ['#22AB94', '#A5D6CF', '#F7525F', '#F4B5BA']; // strong up, weak up, strong down, weak down
+
+  const MORE2 = [
+    // ---------------- trend and overlays ----------------
+    {
+      id: 'bbi', name: 'Bull Bear Index', short: 'BBI', overlay: true, desc: 'Average of the 3, 6, 12 and 24 period moving averages',
+      inputs: [INT('a', 'MA 1', 3), INT('b', 'MA 2', 6), INT('c', 'MA 3', 12), INT('d', 'MA 4', 24)],
+      plots: [{ key: 'bbi', name: 'BBI', color: '#E040FB' }],
+      calc(bars, p) { const s = C(bars), m = [p.a, p.b, p.c, p.d].map((n) => sma(s, n)); return { bbi: s.map((_, i) => (m[0][i] + m[1][i] + m[2][i] + m[3][i]) / 4) }; },
+    },
+    {
+      id: 'dma', name: 'Different of Moving Average', short: 'DMA', overlay: false, desc: 'Fast moving average minus slow moving average, with its own average',
+      inputs: [INT('fast', 'Fast', 10), INT('slow', 'Slow', 50), INT('ama', 'Signal', 10)],
+      plots: [{ key: 'dma', name: 'DMA', color: '#3D8BFD' }, { key: 'ama', name: 'AMA', color: '#F5A623' }], levels: [0],
+      calc(bars, p) { const s = C(bars), d = sub(sma(s, p.fast), sma(s, p.slow)); return { dma: d, ama: sma(d, p.ama) }; },
+    },
+    {
+      id: 'cks', name: 'Chande Kroll Stop', short: 'CKS', overlay: true, desc: 'Stops for longs and shorts from the highest high / lowest low minus a multiple of ATR',
+      inputs: [INT('p', 'ATR length', 10), FLT('x', 'ATR multiplier', 1), INT('q', 'Stop length', 9)],
+      plots: [{ key: 'sl', name: 'Stop long', color: '#22AB94' }, { key: 'ss', name: 'Stop short', color: '#F7525F' }],
+      calc(bars, p) {
+        const a = atr(bars, p.p), fh = zip(highest(H_(bars), p.p), a, (h, v) => h - p.x * v), fl = zip(lowest(L_(bars), p.p), a, (l, v) => l + p.x * v);
+        return { ss: highest(fh, p.q), sl: lowest(fl, p.q) };
+      },
+    },
+    {
+      id: 'vstop', name: 'Volatility Stop', short: 'VStop', overlay: true, desc: 'A trailing stop at a multiple of ATR from the close; flips when the close crosses it',
+      inputs: [INT('length', 'ATR length', 20), FLT('mult', 'Multiplier', 2)],
+      plots: [{ key: 'v', name: 'Stop', palette: UPDN, lineType: 'linebr' }],
+      calc(bars, p) {
+        const a = atr(bars, p.length), n = bars.length, v = nanArr(n), idx = new Array(n).fill(0);
+        let up = true, maxC = NaN, minC = NaN, stop = NaN;
+        for (let i = 0; i < n; i++) {
+          const c = bars[i].c;
+          if (!isFinite(a[i])) { maxC = c; minC = c; continue; }
+          maxC = Math.max(maxC, c); minC = Math.min(minC, c);
+          const s = up ? maxC - p.mult * a[i] : minC + p.mult * a[i];
+          stop = isFinite(stop) ? (up ? Math.max(stop, s) : Math.min(stop, s)) : s;
+          if (up ? c < stop : c > stop) { up = !up; maxC = c; minC = c; stop = up ? c - p.mult * a[i] : c + p.mult * a[i]; }
+          v[i] = stop; idx[i] = up ? 0 : 1;
+        }
+        return { v, v$i: idx };
+      },
+    },
+    {
+      id: 'median', name: 'Median', short: 'Median', overlay: true, desc: 'Rolling median of the price, with ATR bands',
+      inputs: [INT('length', 'Length', 3), INT('atr', 'ATR length', 14), FLT('mult', 'ATR multiplier', 2), { ...SRC, def: 'hl2' }],
+      plots: [{ key: 'm', name: 'Median', color: '#F5A623' }, { key: 'u', name: 'Upper', color: '#22AB94' }, { key: 'l', name: 'Lower', color: '#F7525F' }],
+      calc(bars, p) { const m = rollMedian(source(bars, p.source), p.length), a = atr(bars, p.atr); return { m, u: zip(m, a, (x, y) => x + p.mult * y), l: zip(m, a, (x, y) => x - p.mult * y) }; },
+    },
+    {
+      id: 'twap', name: 'Time-Weighted Average Price', short: 'TWAP', overlay: true, desc: 'Average price of the session so far (every candle counts the same), restarting each day',
+      inputs: [SEL('anchor', 'Restart every', ['Day', 'Week', 'Month'])],
+      plots: [{ key: 't', name: 'TWAP', color: '#9C6ADE', lineType: 'linebr' }],
+      calc(bars, p) {
+        const D = 86400e3, key = (t) => (p.anchor === 'Day' ? Math.floor(t / D) : p.anchor === 'Week' ? Math.floor((t / D + 3) / 7) : new Date(t).getUTCFullYear() * 12 + new Date(t).getUTCMonth());
+        let k0 = null, s = 0, n = 0;
+        return { t: bars.map((b) => { const k = key(b.t); if (k !== k0) { k0 = k; s = 0; n = 0; } s += (b.o + b.h + b.l + b.c) / 4; n++; return s / n; }) };
+      },
+    },
+    {
+      id: 'lrc', name: 'Linear Regression Channel', short: 'LR Channel', overlay: true, desc: 'Best-fit line through the last N closes, with standard deviation bands',
+      inputs: [INT('length', 'Length', 100, 2), FLT('dev', 'Deviations', 2)],
+      plots: [{ key: 'm', name: 'Regression', color: '#3D8BFD' }, { key: 'u', name: 'Upper', color: '#F7525F' }, { key: 'l', name: 'Lower', color: '#22AB94' }],
+      calc(bars, p) {
+        const n = bars.length, L = Math.min(p.length, n), m = nanArr(n), u = nanArr(n), l = nanArr(n);
+        if (L < 2) return { m, u, l };
+        let sx = 0, sy = 0, sxx = 0, sxy = 0;
+        for (let j = 0; j < L; j++) { const y = bars[n - L + j].c; sx += j; sy += y; sxx += j * j; sxy += j * y; }
+        const slope = (L * sxy - sx * sy) / (L * sxx - sx * sx), b0 = (sy - slope * sx) / L;
+        let se = 0;
+        for (let j = 0; j < L; j++) se += (bars[n - L + j].c - (b0 + slope * j)) ** 2;
+        const sd = Math.sqrt(se / L);
+        for (let j = 0; j < L; j++) { const v = b0 + slope * j; m[n - L + j] = v; u[n - L + j] = v + p.dev * sd; l[n - L + j] = v - p.dev * sd; }
+        return { m, u, l };
+      },
+    },
+    {
+      id: 'pivhl', name: 'Pivot Points High Low', short: 'Pivots HL', overlay: true, desc: 'Marks swing highs and lows (a high with lower highs on both sides)',
+      inputs: [INT('left', 'Bars to the left', 10), INT('right', 'Bars to the right', 10)],
+      plots: [{ key: 'ph', name: 'Pivot high', style: 'mark', position: 'above', color: '#F7525F', text: 'H' }, { key: 'pl', name: 'Pivot low', style: 'mark', position: 'below', color: '#22AB94', text: 'L' }],
+      calc(bars, p) {
+        const n = bars.length, ph = new Array(n).fill(0), pl = new Array(n).fill(0);
+        for (const i of pivotsOf(H_(bars), p.left, p.right, true)) ph[i] = 1;
+        for (const i of pivotsOf(L_(bars), p.left, p.right, false)) pl[i] = 1;
+        return { ph, pl };
+      },
+    },
+    {
+      id: 'gaps', name: 'Gaps', short: 'Gaps', overlay: true, desc: 'Price gaps between one candle and the next, shown until the price fills them',
+      inputs: [FLT('minPct', 'Minimum gap (%)', 0.1, 0.05), INT('max', 'Gaps to show', 10), YES_NO('filled', 'Show filled gaps', 'No')],
+      plots: [], colors: [{ key: 'up', name: 'Gap up', color: 'rgba(34,171,148,0.22)' }, { key: 'dn', name: 'Gap down', color: 'rgba(247,82,95,0.22)' }],
+      calc(bars, p) {
+        const list = [];
+        for (let i = 1; i < bars.length; i++) {
+          const a = bars[i - 1], b = bars[i], up = b.l > a.h, dn = b.h < a.l;
+          if (!up && !dn) continue;
+          const top = up ? b.l : a.l, bot = up ? a.h : b.h;
+          if ((top - bot) / a.c < p.minPct / 100) continue;
+          let end = null;
+          for (let k = i + 1; k < bars.length; k++) if (up ? bars[k].l <= bot : bars[k].h >= top) { end = k; break; }
+          if (end != null && p.filled !== 'Yes') continue;
+          list.push({ t1: a.t, t2: end == null ? null : bars[end].t, top, bot, color: up ? 'up' : 'dn', label: up ? 'Gap up' : 'Gap down' });
+        }
+        return zoneOut(list.slice(-p.max));
+      },
+      paint: paintZones,
+    },
+    {
+      id: 'hulltrend', name: 'Hull Trend', short: 'Hull trend', overlay: true, desc: 'A Hull moving average colored by its direction, with the band to its value two candles ago',
+      inputs: [INT('length', 'Length', 55), SEL('type', 'Kind', ['HMA', 'EHMA', 'THMA'])],
+      plots: [{ key: 'h', name: 'Hull', palette: UPDN, width: 2 }, { key: 'h2', name: 'Two candles ago', palette: UPDN }],
+      fills: [{ from: 'h', to: 'h2', key: 'f', color: 'rgba(34,171,148,0.15)', colorDown: 'rgba(247,82,95,0.15)' }],
+      calc(bars, p) {
+        const s = C(bars), n = p.length, half = Math.max(1, Math.round(n / 2)), sq = Math.max(1, Math.round(Math.sqrt(n)));
+        let hm;
+        if (p.type === 'EHMA') hm = ema(sub(ema(s, half).map((v) => 2 * v), ema(s, n)), sq);
+        else if (p.type === 'THMA') { const k = Math.max(1, Math.round(n / 2)), a = wma(s, Math.max(1, Math.round(k / 3))), b = wma(s, Math.max(1, Math.round(k / 2))), c = wma(s, k); hm = wma(a.map((v, i) => 3 * v - b[i] - c[i]), k); }
+        else hm = wma(sub(wma(s, half).map((v) => 2 * v), wma(s, n)), sq);
+        const h2 = shiftFwd(hm, 2), idx = hm.map((v, i) => (v >= h2[i] ? 0 : 1));
+        return { h: hm, h2, h$i: idx, h2$i: idx };
+      },
+    },
+    {
+      id: 'nwe', name: 'Kernel Regression Envelope', short: 'Kernel env', overlay: true, desc: 'Gaussian kernel smoothing of the price (Nadaraya–Watson, only past candles, so it never repaints) with a band at a multiple of the average distance',
+      inputs: [FLT('h', 'Bandwidth', 8, 0.5, 0.5), FLT('mult', 'Band multiplier', 3), INT('look', 'Window', 100, 10, 500), SRC],
+      plots: [{ key: 'm', name: 'Kernel', palette: UPDN }, { key: 'u', name: 'Upper', color: '#F7525F' }, { key: 'l', name: 'Lower', color: '#22AB94' }],
+      calc(bars, p) {
+        const s = source(bars, p.source), n = s.length, W = Math.min(p.look, 500), w = Array.from({ length: W }, (_, j) => Math.exp(-(j * j) / (2 * p.h * p.h)));
+        const m = nanArr(n);
+        for (let i = 0; i < n; i++) { let a = 0, b = 0; for (let j = 0; j < W && i - j >= 0; j++) { a += s[i - j] * w[j]; b += w[j]; } if (i >= W - 1) m[i] = a / b; }
+        const mae = sma(s.map((v, i) => Math.abs(v - m[i])), W).map((v) => v * p.mult);
+        return { m, m$i: dirIdx(m), u: zip(m, mae, (x, d) => x + d), l: zip(m, mae, (x, d) => x - d) };
+      },
+    },
+    {
+      id: 'rangefilter', name: 'Range Filter', short: 'Range filter', overlay: true, desc: 'A line that only moves when the price moves more than its smoothed average range; buy and sell marks when it turns',
+      inputs: [INT('length', 'Sampling period', 100), FLT('mult', 'Range multiplier', 3)],
+      plots: [{ key: 'f', name: 'Filter', palette: UPDN, width: 2 }, { key: 'buy', name: 'Buy', style: 'mark', position: 'below', color: '#22AB94', text: 'Buy' }, { key: 'sell', name: 'Sell', style: 'mark', position: 'above', color: '#F7525F', text: 'Sell' }],
+      calc(bars, p) {
+        const s = C(bars), n = s.length, rng = ema(ema(s.map((v, i) => (i ? Math.abs(v - s[i - 1]) : NaN)), p.length), 2 * p.length - 1).map((v) => v * p.mult);
+        const f = nanArr(n), idx = new Array(n).fill(0), buy = new Array(n).fill(0), sell = new Array(n).fill(0);
+        let prev = NaN, dir = 0, lastDir = 0;
+        for (let i = 0; i < n; i++) {
+          if (!isFinite(rng[i])) { prev = s[i]; continue; }
+          const x = s[i], r = rng[i];
+          const v = x > prev ? Math.max(prev, x - r) : Math.min(prev, x + r);
+          dir = v > prev ? 1 : v < prev ? -1 : dir;
+          f[i] = v; idx[i] = dir < 0 ? 1 : 0;
+          if (dir && dir !== lastDir && lastDir !== 0) { if (dir > 0) buy[i] = 1; else sell[i] = 1; }
+          if (dir) lastDir = dir;
+          prev = v;
+        }
+        return { f, f$i: idx, buy, sell };
+      },
+    },
+    {
+      id: 'halftrend', name: 'HalfTrend', short: 'HalfTrend', overlay: true, desc: 'A trend line that changes side when the price closes beyond the recent highs or lows; ATR bands',
+      inputs: [INT('amp', 'Amplitude', 2), FLT('dev', 'Channel deviation', 2)],
+      plots: [{ key: 'ht', name: 'HalfTrend', palette: ['#3D8BFD', '#F7525F'], width: 2 }, { key: 'buy', name: 'Buy', style: 'mark', position: 'below', color: '#3D8BFD' }, { key: 'sell', name: 'Sell', style: 'mark', position: 'above', color: '#F7525F' }],
+      calc(bars, p) {
+        const n = bars.length, a2 = atr(bars, 100).map((v) => v / 2), hh = highest(H_(bars), p.amp), ll = lowest(L_(bars), p.amp), hma = sma(H_(bars), p.amp), lma = sma(L_(bars), p.amp);
+        const ht = nanArr(n), idx = new Array(n).fill(0), buy = new Array(n).fill(0), sell = new Array(n).fill(0);
+        let trend = 0, next = 0, maxLow = n ? bars[0].l : 0, minHigh = n ? bars[0].h : 0, up = NaN, down = NaN, prevTrend = 0;
+        for (let i = 1; i < n; i++) {
+          if (!isFinite(hh[i]) || !isFinite(a2[i])) continue;
+          if (next === 1) { maxLow = Math.max(ll[i], maxLow); if (hma[i] < maxLow && bars[i].c < bars[i - 1].l) { trend = 1; next = 0; minHigh = hh[i]; } }
+          else { minHigh = Math.min(hh[i], minHigh); if (lma[i] > minHigh && bars[i].c > bars[i - 1].h) { trend = 0; next = 1; maxLow = ll[i]; } }
+          if (trend === 0) { up = prevTrend !== 0 ? (isFinite(down) ? down : maxLow) : isFinite(up) ? Math.max(maxLow, up) : maxLow; if (prevTrend !== 0) buy[i] = 1; }
+          else { down = prevTrend !== 1 ? (isFinite(up) ? up : minHigh) : isFinite(down) ? Math.min(minHigh, down) : minHigh; if (prevTrend !== 1) sell[i] = 1; }
+          ht[i] = trend === 0 ? up : down; idx[i] = trend;
+          prevTrend = trend;
+        }
+        return { ht, ht$i: idx, buy, sell };
+      },
+    },
+    {
+      id: 'atrtrail', name: 'ATR Trailing Stop', short: 'ATR trail', overlay: true, desc: 'A stop that trails the close by a multiple of ATR; buy and sell marks when the close crosses it',
+      inputs: [INT('length', 'ATR length', 10), FLT('key', 'Sensitivity (multiplier)', 1)],
+      plots: [{ key: 's', name: 'Stop', palette: UPDN }, { key: 'buy', name: 'Buy', style: 'mark', position: 'below', color: '#22AB94', text: 'Buy' }, { key: 'sell', name: 'Sell', style: 'mark', position: 'above', color: '#F7525F', text: 'Sell' }],
+      calc(bars, p) {
+        const a = atr(bars, p.length), n = bars.length, s = nanArr(n), idx = new Array(n).fill(0), buy = new Array(n).fill(0), sell = new Array(n).fill(0);
+        let st = NaN;
+        for (let i = 1; i < n; i++) {
+          if (!isFinite(a[i])) continue;
+          const c = bars[i].c, c1 = bars[i - 1].c, loss = p.key * a[i];
+          if (!isFinite(st)) st = c - loss;
+          else if (c > st && c1 > st) st = Math.max(st, c - loss);
+          else if (c < st && c1 < st) st = Math.min(st, c + loss);
+          else st = c > st ? c - loss : c + loss;
+          s[i] = st; idx[i] = c >= st ? 0 : 1;
+          if (isFinite(s[i - 1])) { if (c1 <= s[i - 1] && c > st) buy[i] = 1; if (c1 >= s[i - 1] && c < st) sell[i] = 1; }
+        }
+        return { s, s$i: idx, buy, sell };
+      },
+    },
+    {
+      id: 'sessions', name: 'Trading Sessions', short: 'Sessions', overlay: true, desc: 'Shades the Asia, London and New York sessions (or the ICT killzones) on intraday charts, in each market\'s local time',
+      inputs: [SEL('mode', 'Show', ['Markets', 'Killzones'])],
+      plots: [], colors: [{ key: 'asia', name: 'Asia', color: 'rgba(156,106,222,0.10)' }, { key: 'london', name: 'London', color: 'rgba(61,139,253,0.10)' }, { key: 'ny', name: 'New York', color: 'rgba(245,166,35,0.10)' }, { key: 'lc', name: 'London close', color: 'rgba(34,171,148,0.10)' }],
+      calc: () => ({}),
+      paint(api) {
+        const { ctx, bars, params: p } = api;
+        if (bars.length < 2 || bars[1].t - bars[0].t >= 4 * 3600e3) return;
+        // [color key, label, zone, from hour, to hour] in that zone's local time (daylight saving included)
+        const S = p.mode === 'Killzones'
+          ? [['asia', 'Asia KZ', 'America/New_York', 20, 24], ['london', 'London open KZ', 'America/New_York', 2, 5], ['ny', 'New York open KZ', 'America/New_York', 7, 10], ['lc', 'London close KZ', 'America/New_York', 10, 12]]
+          : [['asia', 'Tokyo', 'Asia/Tokyo', 9, 15], ['london', 'London', 'Europe/London', 8, 16.5], ['ny', 'New York', 'America/New_York', 9.5, 16]];
+        const fm = {}, hourIn = (t, z) => { const f = fm[z] || (fm[z] = new Intl.DateTimeFormat('en-US', { timeZone: z, hourCycle: 'h23', hour: '2-digit', minute: '2-digit', weekday: 'short' })); const P = Object.fromEntries(f.formatToParts(new Date(t)).map((x) => [x.type, x.value])); return { h: (+P.hour % 24) + +P.minute / 60, wd: P.weekday }; };
+        const a = Math.max(0, api.a), b = Math.min(bars.length - 1, api.b), sp = (api.xAt(1) - api.xAt(0)) || 1;
+        ctx.save();
+        ctx.font = '600 10px ' + api.font;
+        ctx.textBaseline = 'top';
+        S.forEach(([key, label, zone, from, to], row) => {
+          let start = -1;
+          const inside = (i) => { const q = hourIn(bars[i].t, zone); return q.wd !== 'Sat' && q.wd !== 'Sun' && q.h >= from && q.h < to; };
+          for (let i = a; i <= b + 1; i++) {
+            const on = i <= b && inside(i);
+            if (on && start < 0) start = i;
+            if (!on && start >= 0) {
+              const x1 = api.xAt(start) - sp / 2, x2 = api.xAt(i - 1) + sp / 2;
+              ctx.fillStyle = api.color(key);
+              ctx.fillRect(x1, api.top, x2 - x1, api.height);
+              if (x2 - x1 > 40) { ctx.fillStyle = api.textColor; ctx.globalAlpha = 0.65; ctx.fillText(label, x1 + 3, api.top + api.height - 16 - row * 12); ctx.globalAlpha = 1; } // (at the bottom, clear of the legend)
+              start = -1;
+            }
+          }
+        });
+        ctx.restore();
+      },
+    },
+    {
+      id: 'pvp', name: 'Volume Profile (Sessions)', short: 'Session VP', overlay: true, desc: 'A volume profile for each day (or week, or month), with its point of control and value area',
+      inputs: [SEL('period', 'Each', ['Day', 'Week', 'Month']), INT('rows', 'Rows', 24, 6, 100), INT('va', 'Value area (%)', 70, 10, 100)],
+      plots: [], colors: [{ key: 'up', name: 'Buy volume', color: 'rgba(34,171,148,0.35)' }, { key: 'down', name: 'Sell volume', color: 'rgba(247,82,95,0.35)' }, { key: 'poc', name: 'Point of control', color: '#F5A623' }],
+      calc: () => ({}),
+      paint(api) {
+        const { ctx, bars, params: p } = api, D = 86400e3;
+        const key = (t) => (p.period === 'Day' ? Math.floor(t / D) : p.period === 'Week' ? Math.floor((t / D + 3) / 7) : new Date(t).getUTCFullYear() * 12 + new Date(t).getUTCMonth());
+        const a = Math.max(0, api.a), b = Math.min(bars.length - 1, api.b);
+        let i = a;
+        while (i > 0 && key(bars[i - 1].t) === key(bars[a].t)) i--;
+        ctx.save();
+        while (i <= b) {
+          let j = i;
+          while (j + 1 < bars.length && key(bars[j + 1].t) === key(bars[i].t)) j++;
+          if (j - i >= 2) {
+            let lo = Infinity, hi = -Infinity;
+            for (let k = i; k <= j; k++) { lo = Math.min(lo, bars[k].l); hi = Math.max(hi, bars[k].h); }
+            const n = p.rows, step = (hi - lo) / n || 1, up = new Float64Array(n), dn = new Float64Array(n);
+            for (let k = i; k <= j; k++) {
+              const B = bars[k], v = B.v || 0, buy = B.bv >= 0 ? B.bv : B.c >= B.o ? v : 0, span = B.h - B.l;
+              const r0 = Math.min(n - 1, Math.floor((B.l - lo) / step)), r1 = Math.min(n - 1, Math.floor((B.h - lo) / step));
+              for (let r = r0; r <= r1; r++) { const f = span > 0 ? (Math.min(B.h, lo + (r + 1) * step) - Math.max(B.l, lo + r * step)) / span : 1 / (r1 - r0 + 1); up[r] += buy * f; dn[r] += (v - buy) * f; }
+            }
+            const tot = Array.from(up, (u, r) => u + dn[r]);
+            let poc = 0;
+            for (let r = 1; r < n; r++) if (tot[r] > tot[poc]) poc = r;
+            const all = tot.reduce((x, y) => x + y, 0);
+            let vaLo = poc, vaHi = poc, inVa = tot[poc];
+            while (all && inVa < (all * p.va) / 100 && (vaLo > 0 || vaHi < n - 1)) { const lo2 = vaLo > 0 ? tot[vaLo - 1] : -1, hi2 = vaHi < n - 1 ? tot[vaHi + 1] : -1; if (hi2 >= lo2) inVa += tot[++vaHi]; else inVa += tot[--vaLo]; }
+            const x0 = api.xAt(i) - 2, W = Math.max(4, api.xAt(j) - x0) * 0.9, mx = tot[poc] || 1;
+            for (let r = 0; r < n; r++) {
+              const y1 = api.yOf(lo + (r + 1) * step), y2 = api.yOf(lo + r * step), hh = Math.max(1, Math.abs(y2 - y1) - 1), wu = (up[r] / mx) * W, wd = (dn[r] / mx) * W;
+              ctx.globalAlpha = r >= vaLo && r <= vaHi ? 1 : 0.45;
+              ctx.fillStyle = api.color('up'); ctx.fillRect(x0, Math.min(y1, y2), wu, hh);
+              ctx.fillStyle = api.color('down'); ctx.fillRect(x0 + wu, Math.min(y1, y2), wd, hh);
+            }
+            ctx.globalAlpha = 1;
+            const yp = Math.round(api.yOf(lo + (poc + 0.5) * step)) + 0.5;
+            ctx.strokeStyle = api.color('poc'); ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.moveTo(x0, yp); ctx.lineTo(api.xAt(j), yp); ctx.stroke();
+          }
+          i = j + 1;
+        }
+        ctx.restore();
+      },
+    },
+    // ---------------- oscillators ----------------
+    {
+      id: 'aroonosc', name: 'Aroon Oscillator', short: 'Aroon Osc', overlay: false, desc: 'Aroon Up minus Aroon Down',
+      inputs: [LEN(14)], plots: [{ key: 'o', name: 'Aroon Osc', color: '#3D8BFD' }], levels: [50, 0, -50], range: [-100, 100],
+      calc(bars, p) {
+        const n = p.length, h = H_(bars), l = L_(bars);
+        return { o: bars.map((_, i) => { if (i < n) return NaN; let hi = i, lo = i; for (let k = i - n; k <= i; k++) { if (h[k] >= h[hi]) hi = k; if (l[k] <= l[lo]) lo = k; } return (100 * (n - (i - hi))) / n - (100 * (n - (i - lo))) / n; }) };
+      },
+    },
+    {
+      id: 'kdj', name: 'KDJ', short: 'KDJ', overlay: false, desc: 'Stochastic K and D with J = 3K − 2D',
+      inputs: [INT('n', 'Period', 9), INT('m1', 'K smoothing', 3), INT('m2', 'D smoothing', 3)],
+      plots: [{ key: 'k', name: 'K', color: '#F5A623' }, { key: 'd', name: 'D', color: '#3D8BFD' }, { key: 'j', name: 'J', color: '#E040FB' }], levels: [80, 50, 20],
+      calc(bars, p) {
+        const hh = highest(H_(bars), p.n), ll = lowest(L_(bars), p.n), n = bars.length, k = nanArr(n), d = nanArr(n), j = nanArr(n);
+        let K = 50, D = 50;
+        for (let i = 0; i < n; i++) {
+          if (!isFinite(hh[i])) continue;
+          const rsv = hh[i] > ll[i] ? ((bars[i].c - ll[i]) / (hh[i] - ll[i])) * 100 : 50;
+          K = ((p.m1 - 1) * K + rsv) / p.m1; D = ((p.m2 - 1) * D + K) / p.m2;
+          k[i] = K; d[i] = D; j[i] = 3 * K - 2 * D;
+        }
+        return { k, d, j };
+      },
+    },
+    {
+      id: 'bias', name: 'Bias', short: 'BIAS', overlay: false, desc: 'How far the close is from its moving averages, in percent',
+      inputs: [INT('a', 'Length 1', 6), INT('b', 'Length 2', 12), INT('c', 'Length 3', 24)],
+      plots: [{ key: 'a', name: 'BIAS 1', color: '#F5A623' }, { key: 'b', name: 'BIAS 2', color: '#3D8BFD' }, { key: 'c', name: 'BIAS 3', color: '#E040FB' }], levels: [0],
+      calc(bars, p) { const s = C(bars), f = (n) => { const m = sma(s, n); return s.map((v, i) => (m[i] ? ((v - m[i]) / m[i]) * 100 : NaN)); }; return { a: f(p.a), b: f(p.b), c: f(p.c) }; },
+    },
+    {
+      id: 'brar', name: 'BRAR', short: 'BRAR', overlay: false, desc: 'AR: strength of highs vs lows from the open; BR: from the previous close',
+      inputs: [LEN(26)], plots: [{ key: 'ar', name: 'AR', color: '#F5A623' }, { key: 'br', name: 'BR', color: '#3D8BFD' }], levels: [100],
+      calc(bars, p) {
+        const n = p.length, hoS = rsum(bars.map((b) => b.h - b.o), n), olS = rsum(bars.map((b) => b.o - b.l), n);
+        const hc = rsum(bars.map((b, i) => (i ? Math.max(0, b.h - bars[i - 1].c) : NaN)), n), cl = rsum(bars.map((b, i) => (i ? Math.max(0, bars[i - 1].c - b.l) : NaN)), n);
+        return { ar: div(hoS, olS, 100), br: div(hc, cl, 100) };
+      },
+    },
+    {
+      id: 'cr', name: 'CR (Energy Index)', short: 'CR', overlay: false, desc: 'Buying vs selling pressure measured from the previous candle\'s middle price',
+      inputs: [LEN(26), INT('ma', 'MA length', 10)], plots: [{ key: 'cr', name: 'CR', color: '#3D8BFD' }, { key: 'm', name: 'MA', color: '#F5A623' }], levels: [100],
+      calc(bars, p) {
+        const mid = bars.map((b) => (b.h + b.l) / 2), u = rsum(bars.map((b, i) => (i ? Math.max(0, b.h - mid[i - 1]) : NaN)), p.length), d = rsum(bars.map((b, i) => (i ? Math.max(0, mid[i - 1] - b.l) : NaN)), p.length);
+        const cr = div(u, d, 100);
+        return { cr, m: sma(cr, p.ma) };
+      },
+    },
+    {
+      id: 'psy', name: 'Psychological Line', short: 'PSY', overlay: false, desc: 'Share of candles that closed higher over the period, in percent',
+      inputs: [LEN(12), INT('ma', 'MA length', 6)], plots: [{ key: 'psy', name: 'PSY', color: '#3D8BFD' }, { key: 'm', name: 'MA', color: '#F5A623' }], levels: [75, 50, 25], range: [0, 100],
+      calc(bars, p) { const u = rsum(bars.map((b, i) => (i ? (b.c > bars[i - 1].c ? 1 : 0) : NaN)), p.length).map((v) => (v * 100) / p.length); return { psy: u, m: sma(u, p.ma) }; },
+    },
+    {
+      id: 'bbp', name: 'Bull Bear Power', short: 'BBP', overlay: false, desc: 'High minus the EMA plus low minus the EMA: who is pushing the price away from its average',
+      inputs: [LEN(13)], plots: [{ key: 'b', name: 'BBP', style: 'histogram', palette: UPDN }], levels: [0],
+      calc(bars, p) { const e = ema(C(bars), p.length), b = bars.map((x, i) => x.h - e[i] + (x.l - e[i])); return { b, b$i: b.map((v) => (v >= 0 ? 0 : 1)) }; },
+    },
+    {
+      id: 'rvgi', name: 'Relative Vigor Index', short: 'RVGI', overlay: false, desc: 'Close minus open relative to the candle range, smoothed, with a signal line',
+      inputs: [LEN(10)], plots: [{ key: 'r', name: 'RVGI', color: '#22AB94' }, { key: 's', name: 'Signal', color: '#F7525F' }], levels: [0],
+      calc(bars, p) {
+        const sw = (a) => a.map((v, i) => (i >= 3 ? (a[i] + 2 * a[i - 1] + 2 * a[i - 2] + a[i - 3]) / 6 : NaN));
+        const num = sw(bars.map((b) => b.c - b.o)), den = sw(bars.map((b) => b.h - b.l));
+        const r = div(rsum(num, p.length), rsum(den, p.length));
+        return { r, s: sw(r) };
+      },
+    },
+    {
+      id: 'smiergo', name: 'SMI Ergodic', short: 'SMI Ergodic', overlay: false, desc: 'True Strength Index (fast settings) with a signal line and their difference as a histogram',
+      inputs: [INT('long', 'Long length', 20), INT('short', 'Short length', 5), INT('sig', 'Signal length', 5)],
+      plots: [{ key: 'osc', name: 'Oscillator', style: 'histogram', palette: UPDN }, { key: 'smi', name: 'SMI', color: '#3D8BFD' }, { key: 's', name: 'Signal', color: '#F5A623' }], levels: [0],
+      calc(bars, p) {
+        const d = change(C(bars)), a = ema(ema(d, p.long), p.short), b = ema(ema(d.map(Math.abs), p.long), p.short), smi = div(a, b), s = ema(smi, p.sig), osc = sub(smi, s);
+        return { smi, s, osc, osc$i: osc.map((v) => (v >= 0 ? 0 : 1)) };
+      },
+    },
+    {
+      id: 'wcci', name: 'Woodies CCI', short: 'Woodies CCI', overlay: false, desc: 'CCI 14 as a histogram (green after six candles above zero, red after six below) with a fast "turbo" CCI 6',
+      inputs: [INT('cci', 'CCI length', 14), INT('turbo', 'Turbo length', 6)],
+      plots: [{ key: 'h', name: 'CCI', style: 'histogram', palette: ['#22AB94', '#F7525F', '#9AA3B2'] }, { key: 't', name: 'Turbo', color: '#F5A623' }], levels: [200, 100, 0, -100, -200],
+      calc(bars, p) {
+        const cciOf = (n) => { const tp = HLC3(bars), m = sma(tp, n); return tp.map((v, i) => { if (!isFinite(m[i])) return NaN; let md = 0; for (let k = i - n + 1; k <= i; k++) md += Math.abs(tp[k] - m[i]); md /= n; return md ? (v - m[i]) / (0.015 * md) : 0; }); };
+        const c = cciOf(p.cci), idx = c.map((_, i) => { if (i < 5) return 2; let up = true, dn = true; for (let k = i - 5; k <= i; k++) { if (!(c[k] > 0)) up = false; if (!(c[k] < 0)) dn = false; } return up ? 0 : dn ? 1 : 2; });
+        return { h: c, h$i: idx, t: cciOf(p.turbo) };
+      },
+    },
+    {
+      id: 'rci', name: 'Rank Correlation Index (ribbon)', short: 'RCI', overlay: false, desc: 'Spearman rank correlation between time and price, for three lengths (−100 to 100)',
+      inputs: [INT('a', 'Short', 9, 2), INT('b', 'Middle', 26, 2), INT('c', 'Long', 52, 2)],
+      plots: [{ key: 'a', name: 'RCI short', color: '#F7525F' }, { key: 'b', name: 'RCI middle', color: '#3D8BFD' }, { key: 'c', name: 'RCI long', color: '#22AB94' }], levels: [80, 0, -80], range: [-100, 100],
+      calc(bars, p) {
+        const s = C(bars), f = (n) => s.map((_, i) => {
+          if (i < n - 1) return NaN;
+          const w = s.slice(i - n + 1, i + 1), order = w.map((v, k) => [v, k]).sort((x, y) => y[0] - x[0]), rank = new Array(n);
+          for (let r = 0; r < n;) { let e = r; while (e + 1 < n && order[e + 1][0] === order[r][0]) e++; for (let q = r; q <= e; q++) rank[order[q][1]] = (r + e) / 2 + 1; r = e + 1; }
+          let d = 0;
+          for (let k = 0; k < n; k++) d += (n - k - rank[k]) ** 2;
+          return (1 - (6 * d) / (n * (n * n - 1))) * 100;
+        });
+        return { a: f(p.a), b: f(p.b), c: f(p.c) };
+      },
+    },
+    {
+      id: 'chopzone', name: 'Chop Zone', short: 'Chop Zone', overlay: false, desc: 'Columns colored by the angle of the 34 EMA: greens trending up, reds down, yellow choppy',
+      inputs: [INT('ema', 'EMA length', 34)],
+      range: [0, 1], plots: [{ key: 'z', name: 'Chop zone', style: 'histogram', palette: ['#26C6DA', '#43A047', '#A5D6A7', '#009688', '#D50000', '#E91E63', '#FF6D00', '#FFB74D', '#FDD835'] }],
+      calc(bars, p) {
+        const e = ema(C(bars), p.ema), hh = highest(H_(bars), 30), ll = lowest(L_(bars), 30);
+        const idx = bars.map((b, i) => {
+          if (!isFinite(e[i - 1]) || !(hh[i] > ll[i])) return 8;
+          const span = 25 / (hh[i] - ll[i]) * ll[i], y2 = ((e[i - 1] - e[i]) / ((b.h + b.l + b.c) / 3)) * span, ang = Math.round((180 * Math.atan2(y2, 1)) / Math.PI) * -1;
+          return ang >= 5 ? 0 : ang >= 3.57 ? 1 : ang >= 2.14 ? 2 : ang >= 0.71 ? 3 : ang <= -5 ? 4 : ang <= -3.57 ? 5 : ang <= -2.14 ? 6 : ang <= -0.71 ? 7 : 8;
+        });
+        return { z: bars.map(() => 1), z$i: idx };
+      },
+    },
+    {
+      id: 'smi', name: 'Stochastic Momentum Index', short: 'SMI', overlay: false, desc: 'Where the close sits relative to the middle of the recent range, double smoothed (−100 to 100)',
+      inputs: [INT('k', '%K length', 10), INT('d', '%D length', 3), INT('ema', 'EMA length', 3)],
+      plots: [{ key: 's', name: 'SMI', color: '#3D8BFD' }, { key: 'sig', name: 'Signal', color: '#F5A623' }], levels: [40, 0, -40], range: [-100, 100],
+      calc(bars, p) {
+        const hh = highest(H_(bars), p.k), ll = lowest(L_(bars), p.k), rel = bars.map((b, i) => b.c - (hh[i] + ll[i]) / 2), rng = hh.map((h, i) => h - ll[i]);
+        const ds = ema(ema(rel, p.d), p.d), dr = ema(ema(rng, p.d), p.d), s = ds.map((v, i) => (isFinite(v) && isFinite(dr[i]) ? (dr[i] ? (200 * v) / dr[i] : 0) : NaN));
+        return { s, sig: ema(s, p.ema) };
+      },
+    },
+    {
+      id: 'pmo', name: 'Price Momentum Oscillator', short: 'PMO', overlay: false, desc: 'Double-smoothed rate of change, with a signal line',
+      inputs: [INT('a', 'First smoothing', 35), INT('b', 'Second smoothing', 20), INT('sig', 'Signal', 10)],
+      plots: [{ key: 'pmo', name: 'PMO', color: '#3D8BFD' }, { key: 's', name: 'Signal', color: '#F5A623' }], levels: [0],
+      calc(bars, p) {
+        const cs = (a, n) => smooth(a, n, 2 / n); // its own smoothing constant (2 / n)
+        const roc = rocOf(C(bars), 1), pmo = cs(cs(roc, p.a).map((v) => v * 10), p.b);
+        return { pmo, s: ema(pmo, p.sig) };
+      },
+    },
+    {
+      id: 'specialk', name: "Pring's Special K", short: 'Special K', overlay: false, desc: 'A weighted sum of short, medium and long rates of change, with a signal line',
+      inputs: [INT('sig', 'Signal', 100)], plots: [{ key: 'k', name: 'Special K', color: '#3D8BFD' }, { key: 's', name: 'Signal', color: '#F5A623' }], levels: [0],
+      calc(bars, p) {
+        const s = C(bars), P = [[10, 10, 1], [15, 10, 2], [20, 10, 3], [30, 15, 4], [40, 50, 1], [65, 65, 2], [75, 75, 3], [100, 100, 4], [195, 130, 1], [265, 130, 2], [390, 130, 3], [530, 195, 4]];
+        const parts = P.map(([r, m, w]) => sma(rocOf(s, r), m).map((v) => v * w)), k = s.map((_, i) => parts.reduce((a, x) => a + x[i], 0));
+        return { k, s: sma(k, p.sig) };
+      },
+    },
+    {
+      id: 'rsidiv', name: 'RSI Divergence', short: 'RSI Div', overlay: false, desc: 'RSI with marks where price and RSI disagree: a lower low in price with a higher low in RSI (bullish), and the reverse (bearish)',
+      inputs: [LEN(14), INT('l', 'Pivot bars left', 5), INT('r', 'Pivot bars right', 5), INT('range', 'Max bars between pivots', 60)],
+      plots: [{ key: 'rsi', name: 'RSI', color: '#9C6ADE' }, { key: 'bull', name: 'Bullish divergence', style: 'mark', position: 'below', color: '#22AB94', text: 'Bull' }, { key: 'bear', name: 'Bearish divergence', style: 'mark', position: 'above', color: '#F7525F', text: 'Bear' }],
+      levels: [70, 50, 30], bandFill: [70, 30], range: [0, 100],
+      calc(bars, p) {
+        const rsi = rsiOf(C(bars), p.length), n = bars.length, bull = new Array(n).fill(0), bear = new Array(n).fill(0);
+        const lows = pivotsOf(rsi.map((v) => (isFinite(v) ? v : 1e9)), p.l, p.r, false), highs = pivotsOf(rsi.map((v) => (isFinite(v) ? v : -1e9)), p.l, p.r, true);
+        for (let k = 1; k < lows.length; k++) { const a = lows[k - 1], b = lows[k]; if (b - a <= p.range && rsi[b] > rsi[a] && bars[b].l < bars[a].l) bull[b + p.r] = 1; }
+        for (let k = 1; k < highs.length; k++) { const a = highs[k - 1], b = highs[k]; if (b - a <= p.range && rsi[b] < rsi[a] && bars[b].h > bars[a].h) bear[b + p.r] = 1; }
+        return { rsi, bull, bear };
+      },
+    },
+    {
+      id: 'rvi', name: 'Relative Volatility Index', short: 'RVI', overlay: false, desc: 'Like RSI, but with the standard deviation of up and down closes instead of their size',
+      inputs: [INT('sd', 'Std dev length', 10), LEN(14)], plots: [{ key: 'r', name: 'RVI', color: '#3D8BFD' }], levels: [80, 50, 20], range: [0, 100],
+      calc(bars, p) {
+        const s = C(bars), sd = stdev(s, p.sd), u = s.map((v, i) => (i && isFinite(sd[i]) ? (v > s[i - 1] ? sd[i] : 0) : NaN)), d = s.map((v, i) => (i && isFinite(sd[i]) ? (v < s[i - 1] ? sd[i] : 0) : NaN));
+        const eu = ema(u, p.length), ed = ema(d, p.length);
+        return { r: eu.map((v, i) => (isFinite(v) && isFinite(ed[i]) ? (v + ed[i] ? (100 * v) / (v + ed[i]) : 50) : NaN)) };
+      },
+    },
+    {
+      id: 'squeeze', name: 'Squeeze Momentum', short: 'Squeeze', overlay: false, desc: 'Momentum histogram; dots on the zero line show when Bollinger Bands are inside the Keltner Channel (a squeeze, dark) or not (gray)',
+      inputs: [INT('bb', 'BB length', 20), FLT('bbm', 'BB multiplier', 2), INT('kc', 'KC length', 20), FLT('kcm', 'KC multiplier', 1.5)],
+      plots: [{ key: 'm', name: 'Momentum', style: 'histogram', palette: PAL4 }, { key: 'sq', name: 'Squeeze', style: 'dots', palette: ['#F5A623', '#9AA3B2', '#3D8BFD'] }], levels: [0],
+      calc(bars, p) {
+        const s = C(bars), bm = sma(s, p.bb), sd = stdev(s, p.bb), km = sma(s, p.kc), rng = sma(trueRange(bars), p.kc);
+        const sqi = s.map((_, i) => { const ub = bm[i] + p.bbm * sd[i], lb = bm[i] - p.bbm * sd[i], uk = km[i] + p.kcm * rng[i], lk = km[i] - p.kcm * rng[i]; return lb > lk && ub < uk ? 0 : lb < lk && ub > uk ? 1 : 2; });
+        const hh = highest(H_(bars), p.kc), ll = lowest(L_(bars), p.kc), m = linreg(s.map((v, i) => v - ((hh[i] + ll[i]) / 2 + km[i]) / 2), p.kc);
+        return { m, m$i: m.map((v, i) => (v >= 0 ? (i && v > m[i - 1] ? 0 : 1) : i && v < m[i - 1] ? 2 : 3)), sq: s.map((v, i) => (isFinite(m[i]) ? 0 : NaN)), sq$i: sqi };
+      },
+    },
+    {
+      id: 'wavetrend', name: 'WaveTrend', short: 'WaveTrend', overlay: false, desc: 'A channel-index oscillator with a fast and a slow line; overbought / oversold at ±60',
+      inputs: [INT('n1', 'Channel length', 10), INT('n2', 'Average length', 21)],
+      plots: [{ key: 'w1', name: 'WT 1', color: '#22AB94' }, { key: 'w2', name: 'WT 2', color: '#F7525F' }, { key: 'd', name: 'Difference', style: 'histogram', palette: ['rgba(61,139,253,0.45)', 'rgba(61,139,253,0.45)'] }],
+      levels: [60, 53, 0, -53, -60],
+      calc(bars, p) {
+        const ap = HLC3(bars), esa = ema(ap, p.n1), d = ema(ap.map((v, i) => Math.abs(v - esa[i])), p.n1), ci = ap.map((v, i) => (d[i] ? (v - esa[i]) / (0.015 * d[i]) : 0)), w1 = ema(ci, p.n2), w2 = sma(w1, 4);
+        return { w1, w2, d: sub(w1, w2) };
+      },
+    },
+    {
+      id: 'qqe', name: 'QQE', short: 'QQE', overlay: false, desc: 'Smoothed RSI with a trailing line from its own volatility (Quantitative Qualitative Estimation)',
+      inputs: [LEN(14), INT('sf', 'RSI smoothing', 5), FLT('q', 'Factor', 4.238, 0.1)],
+      plots: [{ key: 'r', name: 'Smoothed RSI', color: '#3D8BFD', width: 2 }, { key: 't', name: 'Trailing line', color: '#F5A623' }], levels: [70, 50, 30], range: [0, 100],
+      calc(bars, p) {
+        const r = ema(rsiOf(C(bars), p.length), p.sf), W = p.length * 2 - 1, dar = ema(ema(r.map((v, i) => (i ? Math.abs(v - r[i - 1]) : NaN)), W), W).map((v) => v * p.q);
+        const n = r.length, t = nanArr(n);
+        let tr = NaN;
+        for (let i = 1; i < n; i++) {
+          if (!isFinite(r[i]) || !isFinite(dar[i])) continue;
+          const lo = r[i] - dar[i], hi = r[i] + dar[i];
+          if (!isFinite(tr)) tr = lo;
+          else if (r[i - 1] > tr && r[i] > tr) tr = Math.max(tr, lo);
+          else if (r[i - 1] < tr && r[i] < tr) tr = Math.min(tr, hi);
+          else tr = r[i] > tr ? lo : hi;
+          t[i] = tr;
+        }
+        return { r, t };
+      },
+    },
+    {
+      id: 'vixfix', name: 'Williams Vix Fix', short: 'Vix Fix', overlay: false, desc: 'A VIX-like fear gauge from how far the low is below the recent highest close; bright columns mark spikes (often near bottoms)',
+      inputs: [INT('pd', 'Lookback', 22), INT('bbl', 'Band length', 20), FLT('mult', 'Band multiplier', 2), INT('lb', 'Percentile lookback', 50), FLT('ph', 'Percentile', 0.85, 0.01)],
+      plots: [{ key: 'w', name: 'Vix Fix', style: 'histogram', palette: ['#22AB94', '#9AA3B2'] }, { key: 'u', name: 'Upper band', color: '#3D8BFD' }],
+      calc(bars, p) {
+        const hc = highest(C(bars), p.pd), w = bars.map((b, i) => (hc[i] ? ((hc[i] - b.l) / hc[i]) * 100 : NaN)), m = sma(w, p.bbl), sd = stdev(w, p.bbl), u = m.map((v, i) => v + p.mult * sd[i]), rh = highest(w, p.lb).map((v) => v * p.ph);
+        return { w, w$i: w.map((v, i) => (v >= u[i] || v >= rh[i] ? 0 : 1)), u };
+      },
+    },
+    // ---------------- volatility and volume ----------------
+    {
+      id: 'adr', name: 'Average Daily Range', short: 'ADR', overlay: false, desc: 'Average high-to-low range of the last days (whatever the chart\'s timeframe), in price and percent',
+      inputs: [INT('days', 'Days', 14)], plots: [{ key: 'a', name: 'ADR', color: '#3D8BFD' }, { key: 'pct', name: 'ADR %', color: '#F5A623' }],
+      calc(bars, p) {
+        const D = 86400e3, days = [];
+        for (const b of bars) { const k = Math.floor(b.t / D), d = days[days.length - 1]; if (d && d.k === k) { d.h = Math.max(d.h, b.h); d.l = Math.min(d.l, b.l); } else days.push({ k, h: b.h, l: b.l }); }
+        const avg = {};
+        for (let i = 1; i <= days.length; i++) if (i - 1 >= p.days) { let s = 0; for (let k = i - 1 - p.days; k < i - 1; k++) s += days[k].h - days[k].l; avg[days[i - 1].k] = s / p.days; } // completed days before this one
+        const a = bars.map((b) => avg[Math.floor(b.t / D)] ?? NaN);
+        return { a, pct: a.map((v, i) => (v / bars[i].c) * 100) };
+      },
+    },
+    {
+      id: 'bbtrend', name: 'BBTrend', short: 'BBTrend', overlay: false, desc: 'Compares a short and a long Bollinger Band: positive when they widen upward (uptrend), negative downward',
+      inputs: [INT('s', 'Short BB length', 20), INT('l', 'Long BB length', 50), FLT('mult', 'Multiplier', 2)],
+      plots: [{ key: 't', name: 'BBTrend', style: 'histogram', palette: PAL4 }], levels: [0],
+      calc(bars, p) {
+        const s = C(bars), bb = (n) => { const m = sma(s, n), d = stdev(s, n); return [m, m.map((v, i) => v + p.mult * d[i]), m.map((v, i) => v - p.mult * d[i])]; };
+        const [m1, u1, l1] = bb(p.s), [, u2, l2] = bb(p.l), t = m1.map((m, i) => ((Math.abs(l1[i] - l2[i]) - Math.abs(u1[i] - u2[i])) / m) * 100);
+        return { t, t$i: t.map((v, i) => (v >= 0 ? (i && v > t[i - 1] ? 0 : 1) : i && v < t[i - 1] ? 2 : 3)) };
+      },
+    },
+    {
+      id: 'ulcer', name: 'Ulcer Index', short: 'Ulcer', overlay: false, desc: 'Depth and length of drawdowns from the recent high (higher = more painful)',
+      inputs: [LEN(14)], plots: [{ key: 'u', name: 'Ulcer index', color: '#F7525F' }],
+      calc(bars, p) { const s = C(bars), hc = highest(s, p.length), sq = s.map((v, i) => (hc[i] ? (100 * (v - hc[i]) / hc[i]) ** 2 : NaN)); return { u: sma(sq, p.length).map(Math.sqrt) }; },
+    },
+    {
+      id: 'vr', name: 'Volume Ratio', short: 'VR', overlay: false, desc: 'Volume on up candles vs down candles (100 = balanced)',
+      inputs: [LEN(26)], plots: [{ key: 'vr', name: 'VR', color: '#3D8BFD' }], levels: [100],
+      calc(bars, p) {
+        const k = (f) => rsum(bars.map((b, i) => (i ? (f(b.c, bars[i - 1].c) ? b.v || 0 : 0) : NaN)), p.length);
+        const u = k((a, b) => a > b), d = k((a, b) => a < b), e = k((a, b) => a === b);
+        return { vr: u.map((v, i) => (d[i] + e[i] / 2 ? (100 * (v + e[i] / 2)) / (d[i] + e[i] / 2) : NaN)) };
+      },
+    },
+    {
+      id: 'klinger', name: 'Klinger Oscillator', short: 'Klinger', overlay: false, desc: 'Difference of two averages of volume signed by the direction of the typical price, with a signal line',
+      inputs: [INT('fast', 'Fast', 34), INT('slow', 'Slow', 55), INT('sig', 'Signal', 13)],
+      plots: [{ key: 'k', name: 'KO', color: '#3D8BFD', format: 'volume' }, { key: 's', name: 'Signal', color: '#22AB94', format: 'volume' }], levels: [0],
+      calc(bars, p) { const tp = HLC3(bars), sv = bars.map((b, i) => (i ? (tp[i] - tp[i - 1] >= 0 ? b.v || 0 : -(b.v || 0)) : 0)), k = sub(ema(sv, p.fast), ema(sv, p.slow)); return { k, s: ema(k, p.sig) }; },
+    },
+    {
+      id: 'pvo', name: 'Percentage Volume Oscillator', short: 'PVO', overlay: false, desc: 'Difference of a fast and a slow volume EMA in percent, with a signal line and histogram',
+      inputs: [INT('fast', 'Fast', 12), INT('slow', 'Slow', 26), INT('sig', 'Signal', 9)],
+      plots: [{ key: 'h', name: 'Histogram', style: 'histogram', palette: UPDN }, { key: 'pvo', name: 'PVO', color: '#3D8BFD' }, { key: 's', name: 'Signal', color: '#F5A623' }], levels: [0],
+      calc(bars, p) { const v = V(bars), f = ema(v, p.fast), sl = ema(v, p.slow), pvo = f.map((x, i) => (sl[i] ? ((x - sl[i]) / sl[i]) * 100 : NaN)), s = ema(pvo, p.sig), h = sub(pvo, s); return { pvo, s, h, h$i: h.map((x) => (x >= 0 ? 0 : 1)) }; },
+    },
+    {
+      id: 'nvi', name: 'Negative Volume Index', short: 'NVI', overlay: false, desc: 'Moves with price only on days volume falls (where "smart money" is said to trade), with a long EMA',
+      inputs: [INT('ema', 'EMA length', 255)], plots: [{ key: 'n', name: 'NVI', color: '#3D8BFD' }, { key: 'e', name: 'EMA', color: '#F5A623' }],
+      calc(bars, p) { let x = 1000; const n = bars.map((b, i) => { if (i && (b.v || 0) < (bars[i - 1].v || 0) && bars[i - 1].c) x *= b.c / bars[i - 1].c; return x; }); return { n, e: ema(n, p.ema) }; },
+    },
+    {
+      id: 'pvi', name: 'Positive Volume Index', short: 'PVI', overlay: false, desc: 'Moves with price only on days volume rises, with a long EMA',
+      inputs: [INT('ema', 'EMA length', 255)], plots: [{ key: 'n', name: 'PVI', color: '#3D8BFD' }, { key: 'e', name: 'EMA', color: '#F5A623' }],
+      calc(bars, p) { let x = 1000; const n = bars.map((b, i) => { if (i && (b.v || 0) > (bars[i - 1].v || 0) && bars[i - 1].c) x *= b.c / bars[i - 1].c; return x; }); return { n, e: ema(n, p.ema) }; },
+    },
+    {
+      id: 'rvol', name: 'Relative Volume at Time', short: 'RVOL', overlay: false, desc: 'Volume compared with the average volume at the same time of day over the past days (1 = normal)',
+      inputs: [INT('days', 'Days', 10)], plots: [{ key: 'r', name: 'Relative volume', style: 'histogram', palette: ['#22AB94', '#9AA3B2'] }], levels: [1],
+      calc(bars, p) {
+        const iv = intervalOf(bars), D = 86400e3, intraday = iv < D, hist = new Map();
+        const r = bars.map((b, i) => {
+          const key = intraday ? b.t % D : 0, h = hist.get(key) || [];
+          const avg = intraday ? (h.length >= Math.min(3, p.days) ? h.reduce((a, x) => a + x, 0) / h.length : NaN) : (() => { let s = 0, c = 0; for (let k = Math.max(0, i - p.days); k < i; k++) { s += bars[k].v || 0; c++; } return c ? s / c : NaN; })();
+          h.push(b.v || 0);
+          if (h.length > p.days) h.shift();
+          hist.set(key, h);
+          return avg ? (b.v || 0) / avg : NaN;
+        });
+        return { r, r$i: r.map((v) => (v >= 1 ? 0 : 1)) };
+      },
+    },
+  ];
+  for (const d of MORE2) DEFS.push(d);
+
   const BY_ID = Object.fromEntries(DEFS.map((d) => [d.id, d]));
 
   function defaults(def) {

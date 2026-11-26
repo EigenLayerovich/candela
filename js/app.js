@@ -3642,6 +3642,32 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     const opRow = h('label', {}, h('span', {}, ''), op);
     const rightRow = h('label', {}, h('span', {}, 'Value'), h('span', { class: 'tf-pick' }, right, valueIn));
     const barRows = h('div', { class: 'form' }, h('div', { class: 'form-block' }, h('span', {}, 'Trigger'), whenBox), h('div', { class: 'form-block' }, h('span', {}, 'Repeat'), repeatBox));
+    // more conditions (up to 3 more), all true on the same candle or any one of them
+    const extras = [], moreBox = h('div', { class: 'al-more' });
+    const join = h('select', {}, h('option', { value: 'and' }, 'All of them are true'), h('option', { value: 'or' }, 'Any one of them is true'));
+    const joinRow = h('label', { hidden: true }, h('span', {}, 'Fire when'), join);
+    const addBtn = h('button', { class: 'btn ghost small', type: 'button', onclick: () => addExtra() }, '+ Add condition');
+    function addExtra() {
+      if (extras.length >= 3) return;
+      const l = h('select', {}, sources.map((src) => h('option', { value: src.id }, src.label)));
+      const o = h('select', {}, Object.entries(AL.OPS).map(([k, label]) => h('option', { value: k }, label)));
+      const r = h('select', {}, h('option', { value: 'value' }, 'Value'), sources.map((src) => h('option', { value: src.id }, src.label)));
+      const v = h('input', { type: 'number', step: 'any' });
+      const fill = () => { const src = sources.find((x) => x.id === l.value); v.value = (+lastValue(src)).toFixed(src && src.id !== 'price' ? 2 : chart.decimals); };
+      l.addEventListener('change', fill);
+      r.addEventListener('change', () => { v.hidden = r.value !== 'value'; });
+      o.value = 'gt';
+      if (sources[1]) l.value = sources[1].id;
+      fill();
+      const ex = { l, o, r, v };
+      ex.el = h('div', { class: 'al-extra' }, h('span', { class: 'muted al-and' }, join.value === 'or' ? 'or' : 'and'), l, o,
+        h('button', { class: 'icon-btn', type: 'button', title: 'Remove this condition', onclick: () => { extras.splice(extras.indexOf(ex), 1); ex.el.remove(); sync(); } }, '✕'),
+        h('span', {}), r, v);
+      extras.push(ex);
+      moreBox.appendChild(ex.el);
+      sync();
+    }
+    join.addEventListener('change', () => { for (const x of moreBox.querySelectorAll('.al-and')) x.textContent = join.value === 'or' ? 'or' : 'and'; });
     const note = h('p', { class: 'muted' });
     const leftSrc = () => sources.find((x) => 's:' + x.id === left.value);
     // the latest value of a source, to prefill the level
@@ -3668,7 +3694,10 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
         lastLeft = left.value;
       }
       valueIn.hidden = right.value !== 'value';
-      const simplePrice = !isMarker && src && src.id === 'price' && right.value === 'value' && op.value.startsWith('cross');
+      moreBox.hidden = isMarker;
+      addBtn.hidden = isMarker || extras.length >= 3;
+      joinRow.hidden = isMarker || !extras.length;
+      const simplePrice = !isMarker && !extras.length && src && src.id === 'price' && right.value === 'value' && op.value.startsWith('cross');
       barRows.hidden = simplePrice;
       if (isMarker) note.textContent = csv ? 'Imported CSV data never updates, so this alert can’t fire on it.' : `Watches ${bare(slot.symbol)} on the ${tfName(slot.tf)} timeframe with this script's current settings, even if you switch the chart to something else.`;
       else if (simplePrice) note.textContent = 'A price alert: checked on every price update, fires once.';
@@ -3684,7 +3713,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     const opts = alertOptions();
     const body = h('div', { class: 'form' },
       h('label', {}, h('span', {}, 'Symbol'), h('b', {}, `${bare(slot.symbol)}${csv ? '' : ' · ' + tfName(slot.tf)}`)),
-      h('label', {}, h('span', {}, 'Condition'), left), opRow, rightRow, barRows, note, opts.el);
+      h('label', {}, h('span', {}, 'Condition'), left), opRow, rightRow, moreBox, h('div', { class: 'al-add' }, addBtn), joinRow, barRows, note, opts.el);
     const create = () => {
       const when = body.querySelector('input[name="alertWhen"]:checked').value, repeat = body.querySelector('input[name="alertRepeat"]:checked').value;
       const o = opts.read();
@@ -3692,7 +3721,17 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       if (left.value.startsWith('m:')) { const mk = markers[+left.value.slice(2)]; addMarkerAlert(slot, mk.ind, mk.pl, when, repeat, o); m.close(); return; }
       const src = leftSrc(), rightSpec = right.value === 'value' ? { src: 'value', value: +valueIn.value } : sources.find((x) => 's:' + x.id === right.value).spec;
       if (rightSpec.src === 'value' && !isFinite(rightSpec.value)) { valueIn.focus(); return; }
-      if (src.id === 'price' && rightSpec.src === 'value' && op.value.startsWith('cross')) addAlert(slot.symbol, rightSpec.value, op.value === 'crossup' ? 'up' : op.value === 'crossdown' ? 'down' : null, o);
+      if (extras.length) {
+        const more = [];
+        for (const x of extras) {
+          const ls = sources.find((y) => y.id === x.l.value).spec, rs = x.r.value === 'value' ? { src: 'value', value: +x.v.value } : sources.find((y) => y.id === x.r.value).spec;
+          if (rs.src === 'value' && !isFinite(rs.value)) { x.v.focus(); return; }
+          more.push({ left: ls, op: x.o.value, right: rs });
+        }
+        o.more = more;
+        o.join = join.value;
+        addCondAlert(slot, src.spec, op.value, rightSpec, when, repeat, o);
+      } else if (src.id === 'price' && rightSpec.src === 'value' && op.value.startsWith('cross')) addAlert(slot.symbol, rightSpec.value, op.value === 'crossup' ? 'up' : op.value === 'crossdown' ? 'down' : null, o);
       else addCondAlert(slot, src.spec, op.value, rightSpec, when, repeat, o);
       m.close();
     };

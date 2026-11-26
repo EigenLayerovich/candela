@@ -1,4 +1,9 @@
-## New in 1.22.0
+## New in 1.23.0
+
+- **46 more indicators (124 in all)**: KDJ, Squeeze Momentum, WaveTrend, QQE, HalfTrend, Range Filter, ATR Trailing Stop, Chande Kroll Stop, Volatility Stop, RSI Divergence, Kernel Regression Envelope, Linear Regression Channel, Trading Sessions and ICT killzones, Volume Profile per day/week/month, Ulcer Index, Klinger, PVO, Williams Vix Fix and more.
+- **Alerts with several conditions**: "+ Add condition" in the alert dialog; all true at once, or any one.
+
+## In 1.22.0
 
 - **Open Interest, Funding Rate and Long/Short Ratio** indicators with history, on any crypto chart (Binance, OKX or Bybit data; Hyperliquid's own hourly funding).
 - **Live liquidations** from Binance, Bybit and OKX (Book button → Liquidations).

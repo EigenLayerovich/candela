@@ -423,6 +423,10 @@ async function makeAlert(b) {
     };
     if (!AL.OPS[b.op]) throw new BadRequest('Unknown condition');
     return {
+      ...(Array.isArray(b.more) && b.more.length ? {
+        more: b.more.slice(0, 3).map((c) => { if (!c || !AL.OPS[c.op]) throw new BadRequest('Unknown condition'); return { left: side(c.left, false), op: c.op, right: side(c.right, true) }; }),
+        join: b.join === 'or' ? 'or' : 'and',
+      } : {}),
       ...base, kind: 'cond', tf: b.tf, left: side(b.left, false), right: side(b.right, true), op: b.op,
       when: b.when === 'bar' ? 'bar' : 'close', repeat: b.repeat === 'once' ? 'once' : 'every', ...(num(b.lastBarT) ? { lastBarT: b.lastBarT } : {}),
     };

@@ -162,7 +162,10 @@
   // ---- conditions: left / right = { src: 'price' } | { src: 'value', value } | { src: 'ind', type, params, key, label }
   const OPS = { cross: 'crossing', crossup: 'crossing up', crossdown: 'crossing down', gt: 'greater than', lt: 'less than' };
   const sideLabel = (s) => (s.src === 'price' ? 'Price' : s.src === 'value' ? (Number.isInteger(s.value) ? String(s.value) : fmt(s.value)) : s.label);
-  const condTitle = (a) => `${bare(a.symbol)} ${TF_LABEL(a.tf)} · ${sideLabel(a.left)} ${OPS[a.op] || a.op} ${sideLabel(a.right)}`;
+  // more conditions: a.more = [{ left, op, right }], a.join = 'and' (all true on the same candle) | 'or' (any)
+  const oneCond = (c) => `${sideLabel(c.left)} ${OPS[c.op] || c.op} ${sideLabel(c.right)}`;
+  const condText = (a) => [a, ...(a.more || [])].map(oneCond).join(a.join === 'or' ? ' or ' : ' and ');
+  const condTitle = (a) => `${bare(a.symbol)} ${TF_LABEL(a.tf)} · ${condText(a)}`;
   function seriesOf(side, bars, resolve, defaults) {
     if (side.src === 'price') return bars.map((b) => b.c);
     if (side.src === 'value') return bars.map(() => side.value);
@@ -185,9 +188,17 @@
     if (!a.active) return { type: 'ok' };
     const n = bars.length, i = a.when === 'close' ? n - 2 : n - 1;
     if (i < 1) return { type: 'ok' };
-    let L, R;
-    try { L = seriesOf(a.left, bars, resolve, defaults); R = seriesOf(a.right, bars, resolve, defaults); } catch (e) { return { type: 'pause', reason: e.message }; }
-    const hit = condHit(a.op, L[i - 1], R[i - 1], L[i], R[i]), t = bars[i].t;
+    let L, R, hit;
+    try {
+      L = seriesOf(a.left, bars, resolve, defaults); R = seriesOf(a.right, bars, resolve, defaults);
+      hit = condHit(a.op, L[i - 1], R[i - 1], L[i], R[i]);
+      for (const c of a.more || []) {
+        if (a.join === 'or' ? hit : !hit) break; // already decided
+        const L2 = seriesOf(c.left, bars, resolve, defaults), R2 = seriesOf(c.right, bars, resolve, defaults), h2 = condHit(c.op, L2[i - 1], R2[i - 1], L2[i], R2[i]);
+        hit = a.join === 'or' ? hit || h2 : hit && h2;
+      }
+    } catch (e) { return { type: 'pause', reason: e.message }; }
+    const t = bars[i].t;
     if (prime) return hit && a.lastBarT !== t ? { type: 'prime', t } : { type: 'ok' };
     if (!hit || a.lastBarT === t) return { type: 'ok' };
     return { type: 'fire', t, price: bars[i].c, value: L[i] };
@@ -206,6 +217,6 @@
   root.CandelaAlerts = {
     isMarker, isCond, isLine, isBar, isTick, serverEligible, evaluateMarker, applyMarkerFire, markerTitle, priceCrossed, priceTouched, applyPriceFire, findMarker, TF_LABEL,
     lineAt, lineCrossed, applyLineFire, lineTitle, OPS, condTitle, evaluateCondition, applyCondFire, fmt,
-    isRect, rectCrossed, applyRectFire, rectTitle, gate, inHours, toMin, expiredText,
+    isRect, rectCrossed, applyRectFire, rectTitle, condText, gate, inHours, toMin, expiredText,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

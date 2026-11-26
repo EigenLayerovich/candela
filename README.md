@@ -284,7 +284,7 @@ is meant for personal use.
   **Renko, Kagi, Point & Figure, Line break and Range bars** (see below)
 - **Custom indicators** with Candela Script, a small language with an editor, examples and reference
   (see below).
-- **Indicators (78)**, all free:
+- **Indicators (124)**, all free:
   - *Moving averages and overlays*: SMA, EMA, WMA, Hull, DEMA, TEMA, VWMA, ALMA, SMMA, KAMA, Least Squares,
     McGinley Dynamic, MA Ribbon, MA Cross, Envelopes, Bollinger Bands, Keltner, Donchian, VWAP, Supertrend,
     Parabolic SAR, Ichimoku, Chandelier Exit, Williams Alligator, Williams Fractals, Zig Zag, Pivot Points
@@ -298,6 +298,18 @@ is meant for personal use.
   - *Order flow and smart money*: Volume Delta, Cumulative Volume Delta, Volume Profile (Visible Range),
     Fair Value Gaps, Order Blocks, Liquidity Levels, Market Structure (BOS / CHoCH); see below.
   - *Derivatives*: Open Interest, Funding Rate, Long/Short Ratio; see below.
+  - *More trend and overlays*: Bull Bear Index, Chande Kroll Stop, Volatility Stop, Median (with ATR bands),
+    TWAP, Linear Regression Channel, Pivot Points High Low, Gaps, Hull Trend, Kernel Regression Envelope
+    (Nadaraya–Watson, non-repainting), Range Filter, HalfTrend, ATR Trailing Stop, Trading Sessions (Tokyo,
+    London, New York, or the ICT killzones, in each market's local time), Volume Profile per day/week/month.
+  - *More oscillators*: Aroon Oscillator, KDJ, Bias, BRAR, CR, Psychological Line, Bull Bear Power, Relative
+    Vigor Index, SMI Ergodic, Woodies CCI, Rank Correlation Index (ribbon), Chop Zone, Stochastic Momentum
+    Index, Price Momentum Oscillator, Pring's Special K, RSI Divergence, Relative Volatility Index, Squeeze
+    Momentum, WaveTrend, QQE, Williams Vix Fix, Different of Moving Average.
+  - *More volume and volatility*: Average Daily Range, BBTrend, Ulcer Index, Volume Ratio, Klinger
+    Oscillator, Percentage Volume Oscillator, Negative and Positive Volume Index, Relative Volume at Time.
+  Several popular community indicators (Squeeze Momentum, WaveTrend, QQE, HalfTrend, Range Filter, the
+  Hull and kernel envelopes, Vix Fix) are Candela's own implementations of their published formulas.
   Every input and color is editable; oscillators get their own resizable, reorderable panes.
 - **Drawing tools (77)**: lines, channels, pitchforks, Fibonacci and Gann tools, chart patterns, Elliott
   waves, cycles, long/short positions, forecasts, volume profiles, fair value gap and order block zones, measurers, brushes, arrows and shapes;
@@ -309,6 +321,8 @@ is meant for personal use.
     *crossing*, *crossing up*, *crossing down*, *greater than* or *less than* a value or another line. For
     example RSI crossing up 30, EMA 20 crossing EMA 50, price greater than SMA 200, MACD crossing its
     signal. Checked when the bar closes or as soon as it happens, every time (once per bar) or only once.
+    **+ Add condition** combines up to four conditions: all true on the same candle, or any one of them
+    (e.g. RSI below 30 *and* price above the 200-day SMA).
     Indicators set to another timeframe are calculated on the alert's timeframe.
   - *Drawn lines*: select a trend line, ray, extended line or parallel channel and click **Alert** in its
     toolbar: fires when the price crosses the line (or only up / only down). Moving the line moves the alert.

@@ -277,9 +277,11 @@ is meant for personal use.
   *Compare symbol…*). The price scale switches to percent change from the first visible bar so
   different-priced assets line up; each comparison has its own color and can be hidden or removed from
   the legend. Works with imported CSV data too (e.g. a stock vs BTC). The **%** button turns on the
-  percent scale without comparing.
-- **Chart types**: candles, hollow candles, Heikin Ashi, bars, line, area, and **Renko, Kagi and Point &
-  Figure** (see below)
+  percent scale without comparing; click it again for a scale **indexed to 100** at the first bar on screen
+  (shown as **100**), and once more to go back to prices.
+- **Chart types**: candles, hollow candles, Heikin Ashi, bars, line, area, baseline (green above, red below
+  the first bar on screen), step line, high-low, volume candles (wider candles for more volume), and
+  **Renko, Kagi, Point & Figure, Line break and Range bars** (see below)
 - **Custom indicators** with Candela Script, a small language with an editor, examples and reference
   (see below).
 - **Indicators (75)**, all free:
@@ -326,7 +328,7 @@ is meant for personal use.
 - **Watchlist** with live prices and 24h change.
 - **CSV import** for anything else: Date, Open, High, Low, Close, Volume (Yahoo Finance-style exports
   work).
-- Light/dark theme, PNG snapshot of the whole layout, everything persisted in your browser.
+- Themes: Dark, Ocean (dark blue), Slate (dark grey), Light and Paper (warm light), in Chart settings; the moon button switches between your light and dark one. PNG snapshot of the whole layout, everything persisted in your browser.
 - Offline fallback: if Binance is unreachable it switches to a simulated demo feed.
 
 ## Custom timeframes
@@ -400,6 +402,8 @@ with the live price until the day closes, as on other charting apps. It works fo
   layout with its drawings and the scripts it uses as a `.json` file; **Import file…** opens one (on another
   computer, say) and adds it to your saved layouts. Drawings you already have are kept.
 - **Up to 16 charts**: the layout menu has 4×2, 3×3, 4×3 and 4×4 grids.
+- **Several watchlists**: click the watchlist's name for your lists, *New list…*, *Copy this list…*,
+  *Rename…* and *Delete*.
 - **Watchlist**: *All / Gainers / Losers* tabs, a 24h volume column, and sorting by any column (click its
   header; again to reverse; a third time for your own order).
 - **Keyboard shortcuts**: press `?` (or right-click the chart → *Keyboard shortcuts*) for the full list.
@@ -474,7 +478,7 @@ commission, stop, target and slippage without editing the script). The trades ar
 chart. It tests the candles loaded on the chart: scroll left to load more history. Two examples are in the
 script editor: *Strategy: EMA cross* and *Strategy: RSI long/short*.
 
-## Renko, Kagi and Point & Figure
+## Renko, Kagi, Point & Figure, Line break and Range bars
 
 Pick them in the chart-type menu. They ignore time: a new brick, line or column appears only when the
 price moves enough, so quiet periods take no space. They're built from the closes of the chart's
@@ -485,6 +489,10 @@ timeframe (a 1H Renko chart uses 1-hour closes).
   rises above the previous high, thin and red (yin) after it falls below the previous low.
 - **Point & Figure**: columns of X (rising) and O (falling), one mark per box; a new column after the
   reversal number of boxes (3 by default).
+- **Line break**: a new line when the close goes beyond the last line in the trend's direction; the trend
+  turns only when the close goes beyond the high or low of the last 3 lines (set the number in *Box…*).
+- **Range bars**: every bar spans the same price range (ATR 14 or a fixed range). They're built from each
+  candle's open, high, low and close, so the order of moves inside one candle is assumed.
 
 **Box…** next to the menu sets the size: *Auto* uses the 14-bar Average True Range rounded to a round
 number (shown in the title, e.g. `Renko · box 500 (ATR 14)`), or a fixed size; Kagi can also reverse by a

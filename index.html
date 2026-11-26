@@ -29,10 +29,16 @@
       <option value="bars">Bars</option>
       <option value="line">Line</option>
       <option value="area">Area</option>
+      <option value="baseline">Baseline</option>
+      <option value="stepline">Step line</option>
+      <option value="hilo">High-low</option>
+      <option value="volcandles">Volume candles</option>
       <optgroup label="Price-only (no time)">
         <option value="renko">Renko</option>
         <option value="kagi">Kagi</option>
         <option value="pnf">Point &amp; Figure</option>
+        <option value="linebreak">Line break</option>
+        <option value="range">Range bars</option>
       </optgroup>
     </select>
     <button id="brickBtn" class="hbtn small" title="Box size and reversal" hidden>Box…</button>
@@ -100,7 +106,7 @@
     </aside>
     <aside id="side" class="side">
       <div class="side-sec grow">
-        <div class="side-head"><span>Watchlist</span><button id="wlAdd" class="icon-btn" title="Add symbol">+</button></div>
+        <div class="side-head"><button id="wlTitle" class="wl-title" title="Switch, add, rename or delete watchlists">Watchlist</button><button id="wlAdd" class="icon-btn" title="Add symbol">+</button></div>
         <div class="wl-cols"><span>Symbol</span><span>Last</span><span>24h</span></div>
         <div id="watchlist" class="scroll"></div>
       </div>

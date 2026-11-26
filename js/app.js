@@ -134,6 +134,9 @@
   CC.setLook(state.look || {});
   if (!state.exNotes || typeof state.exNotes !== 'object') state.exNotes = {};
   if (state.magnet === true) state.magnet = 'strong';
+  if (!Array.isArray(state.watchlists) || !state.watchlists.length) { state.watchlists = [{ name: 'Watchlist', list: state.watchlist }]; state.wlIndex = 0; }
+  state.wlIndex = Math.min(state.wlIndex || 0, state.watchlists.length - 1);
+  state.watchlist = state.watchlists[state.wlIndex].list;
   state.wl = { tab: 'all', sort: null, ...state.wl };
   if (!Array.isArray(state.customTfs)) state.customTfs = [];
   state.customTfs = state.customTfs.filter((tf) => MD.ensureTf(tf));
@@ -158,7 +161,11 @@
   }
   if (PREVIEW) state.sideOpen = false;
   let saveTimer;
-  const flush = () => { clearTimeout(saveTimer); try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } };
+  const flush = () => {
+    clearTimeout(saveTimer);
+    if (state.watchlists && state.watchlists[state.wlIndex]) state.watchlists[state.wlIndex].list = state.watchlist; // keep the shown list in its slot
+    try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+  };
   const save = () => { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 250); };
   window.addEventListener('pagehide', flush);
   document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
@@ -167,7 +174,18 @@
   state.stocks = { key: '', perMin: 8, perDay: 800, ...state.stocks };
   MD.stockConfig(state.stocks);
   const quotes = {}, lastPx = {};
+  const THEME_LIST = [['dark', 'Dark', 'dark'], ['ocean', 'Ocean (dark blue)', 'dark'], ['slate', 'Slate (dark grey)', 'dark'], ['light', 'Light', 'light'], ['paper', 'Paper (warm light)', 'light']];
+  const toneOf = (t) => (THEME_LIST.find((x) => x[0] === t) || THEME_LIST[0])[2];
+  function applyTheme(t) {
+    if (!THEME_LIST.some((x) => x[0] === t)) t = 'dark';
+    state.theme = t;
+    state[toneOf(t) === 'dark' ? 'darkTheme' : 'lightTheme'] = t;
+    document.documentElement.dataset.theme = t;
+    document.documentElement.dataset.tone = toneOf(t);
+    for (const sl of slots) sl.chart.setTheme(t);
+  }
   document.documentElement.dataset.theme = state.theme;
+  document.documentElement.dataset.tone = toneOf(state.theme);
 
   // ------------------------------------------------------------------ custom script registry
   const CS = window.CandelaScript;
@@ -207,6 +225,7 @@
         if (def) c.addIndicator(def, s.params || {}, { colors: s.colors, visible: s.visible, weight: s.weight, tf: s.tf, styles: s.styles });
       }
       c.percentMode = !!cfg.percent;
+      c.indexMode = cfg.percent === 'index';
       c.onCompareAction = (act, id) => {
         const cc = (this.cfg.compares || []).find((x) => x.id === id);
         if (!cc) return;
@@ -1359,7 +1378,7 @@
       if (active.chart.isBrick && !state.brickNoteSeen) {
         state.brickNoteSeen = true;
         save();
-        toast('Renko, Kagi and Point & Figure ignore time: a new brick, line or column appears only when price moves enough. Indicators and drawings follow them. "Box…" next to the menu sets the size.', 'info', 9000);
+        toast('Renko, Kagi, Point & Figure, Line break and Range bars ignore time: a new brick, line, column or bar appears only when price moves enough. Indicators and drawings follow them. "Box…" next to the menu sets the size.', 'info', 9000);
       }
     });
     $('#brickBtn').addEventListener('click', openBrickSettings);
@@ -1367,9 +1386,13 @@
     $('#scriptBtn').addEventListener('click', () => openScriptEditor());
     $('#compareBtn').addEventListener('click', () => openCompareSearch());
     $('#pctBtn').addEventListener('click', () => {
-      if (active.chart.compares.some((c) => c.visible)) { toast('The percent scale stays on while symbols are compared.', 'info', 2500); return; }
-      active.cfg.percent = !active.cfg.percent;
-      active.chart.percentMode = active.cfg.percent;
+      // off → percent → indexed to 100 → off (while comparing: percent ↔ indexed)
+      const comparing = active.chart.compares.some((c) => c.visible), cur = active.cfg.percent === 'index' ? 'index' : active.cfg.percent ? 'pct' : 'off';
+      const next = comparing ? (cur === 'index' ? 'pct' : 'index') : { off: 'pct', pct: 'index', index: 'off' }[cur];
+      active.cfg.percent = next === 'off' ? false : next === 'index' ? 'index' : true;
+      active.chart.percentMode = !!active.cfg.percent;
+      active.chart.indexMode = active.cfg.percent === 'index';
+      toast(next === 'pct' ? 'Percent scale: change from the first bar on screen' : next === 'index' ? 'Indexed to 100 at the first bar on screen' : 'Price scale', 'info', 1500);
       active.chart.main.auto = true;
       active.chart.invalidate();
       updateHeader();
@@ -1394,9 +1417,8 @@
     $('#autoBtn').addEventListener('click', () => active.chart.resetView());
     $('#snapBtn').addEventListener('click', snapshot);
     $('#themeBtn').addEventListener('click', () => {
-      state.theme = state.theme === 'dark' ? 'light' : 'dark';
-      document.documentElement.dataset.theme = state.theme;
-      for (const s of slots) s.chart.setTheme(state.theme);
+      // light ↔ dark, keeping the variant picked in Chart settings
+      applyTheme(toneOf(state.theme) === 'dark' ? state.lightTheme || 'light' : state.darkTheme || 'dark');
       save();
     });
     $('#sideBtn').addEventListener('click', () => { state.sideOpen = !state.sideOpen; updateHeader(); save(); });
@@ -1429,6 +1451,7 @@
     $('#logBtn').classList.toggle('active', !!active.cfg.log);
     const comparing = active.chart.compares.some((c) => c.visible);
     $('#pctBtn').classList.toggle('active', comparing || !!active.cfg.percent);
+    $('#pctBtn').textContent = active.cfg.percent === 'index' ? '100' : '%';
     $('#pctBtn').title = comparing ? 'Percent scale (on while comparing symbols)' : 'Percent scale: change from the first visible bar';
     const nc = (active.cfg.compares || []).length;
     $('#compareBtn span').textContent = nc ? `Compare (${nc})` : 'Compare';
@@ -1449,14 +1472,18 @@
     const form = h('div', { class: 'form' });
     const num = (value, step) => h('input', { type: 'number', value, min: 0, step: step || 'any' });
     const row = (label, ...ctl) => form.appendChild(h('label', {}, h('span', {}, label), h('span', { class: 'tf-pick' }, ...ctl)));
-    if (type === 'renko' || type === 'pnf') {
+    if (type === 'linebreak') {
+      const lines = num(o.lines || 3, 1);
+      lines.addEventListener('input', () => { const v = Math.round(+lines.value); if (v >= 1 && v <= 10) { o.lines = v; apply(); } });
+      row('Lines to break', lines);
+    } else if (type === 'renko' || type === 'pnf' || type === 'range') {
       const mode = h('select', {}, h('option', { value: 'atr' }, 'Auto (ATR 14)'), h('option', { value: 'fixed' }, 'Fixed'));
       const size = num(o.size || +(auto || 0).toPrecision(4));
       mode.value = o.mode === 'fixed' ? 'fixed' : 'atr';
       const sync = () => { size.disabled = mode.value !== 'fixed'; o.mode = mode.value; if (mode.value === 'fixed') o.size = +size.value; apply(); };
       mode.addEventListener('change', sync);
       size.addEventListener('input', () => { if (+size.value > 0) { o.size = +size.value; apply(); } });
-      row('Box size', mode, size);
+      row(type === 'range' ? 'Range' : 'Box size', mode, size);
       size.disabled = mode.value !== 'fixed';
       if (type === 'pnf') {
         const rev = num(o.rev || 3, 1);
@@ -1481,10 +1508,12 @@
     }
     form.appendChild(h('p', { class: 'muted' }, type === 'renko'
       ? 'A new brick when the close moves one box beyond the last brick; it takes two boxes to turn around.'
+      : type === 'linebreak' ? 'A new line when the close goes beyond the last line in the trend\'s direction; the trend turns only when the close goes beyond the high or low of this many lines (3 is the classic three-line break).'
+      : type === 'range' ? 'Every bar spans this price range, however long it takes. Built from the candles\' open, high, low and close, so the order of moves inside one candle is assumed.'
       : type === 'kagi' ? 'The line turns when price reverses by this amount. It is thick and green after rising above the previous high, thin and red after falling below the previous low.'
         : 'An X for each box price rises, an O for each box it falls; a new column after the reversal number of boxes.'));
     let ok = false;
-    const m = openModal({ renko: 'Renko', kagi: 'Kagi', pnf: 'Point & Figure' }[type] + ' settings', form, {
+    const m = openModal({ renko: 'Renko', kagi: 'Kagi', pnf: 'Point & Figure', linebreak: 'Line break', range: 'Range bars' }[type] + ' settings', form, {
       footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'),
         h('button', { class: 'btn primary', onclick: () => { ok = true; slot.cfg.brick = all; save(); m.close(); } }, 'OK')],
       onClose: () => { if (!ok) c.setBrickOptions(orig); },
@@ -2732,6 +2761,44 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   // ------------------------------------------------------------------ watchlist
   let tickStop = null;
 
+  function switchWatchlist(i) {
+    state.watchlists[state.wlIndex].list = state.watchlist;
+    state.wlIndex = i;
+    state.watchlist = state.watchlists[i].list;
+    save(); renderWatchlist(); startTickers();
+  }
+  function showWatchlistMenu(btn) {
+    const menu = $('#ctxMenu'), r = btn.getBoundingClientRect();
+    menu.innerHTML = '';
+    const item = (label, fn, cls = '') => menu.appendChild(h('button', { class: 'ctx-item ' + cls, onclick: () => { hideMenus(); fn(); } }, label));
+    state.watchlists.forEach((w, i) => item((i === state.wlIndex ? '✓ ' : '\u2003') + `${w.name} (${(i === state.wlIndex ? state.watchlist : w.list).length})`, () => switchWatchlist(i)));
+    menu.appendChild(h('div', { class: 'ctx-sep' }));
+    item('New list…', async () => {
+      const name = await askText('New watchlist', '', 'e.g. "Majors", "Hyperliquid", "Stocks"');
+      if (!name) return;
+      state.watchlists[state.wlIndex].list = state.watchlist;
+      state.watchlists.push({ name: name.slice(0, 40), list: [] });
+      switchWatchlist(state.watchlists.length - 1);
+      toast('Empty list: add symbols with +', 'info', 2500);
+    });
+    item('Copy this list…', async () => {
+      const name = await askText('Copy watchlist', `${state.watchlists[state.wlIndex].name} copy`);
+      if (!name) return;
+      state.watchlists.push({ name: name.slice(0, 40), list: state.watchlist.slice() });
+      switchWatchlist(state.watchlists.length - 1);
+    });
+    item('Rename…', async () => { const name = await askText('Rename watchlist', state.watchlists[state.wlIndex].name); if (name) { state.watchlists[state.wlIndex].name = name.slice(0, 40); save(); renderWatchlist(); } });
+    if (state.watchlists.length > 1) item('Delete this list', async () => {
+      if (!(await askConfirm('Delete watchlist', `Delete "${state.watchlists[state.wlIndex].name}" and its ${state.watchlist.length} symbols?`, 'Delete'))) return;
+      state.watchlists.splice(state.wlIndex, 1);
+      state.wlIndex = 0;
+      state.watchlist = state.watchlists[0].list;
+      save(); renderWatchlist(); startTickers();
+    }, 'danger');
+    menu.classList.remove('hidden');
+    menu.style.left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 8) + 'px';
+    menu.style.top = r.bottom + 4 + 'px';
+  }
   // what the watchlist shows: All / Gainers / Losers, sorted by a column (click its header) or in your order
   function wlShown() {
     const W = state.wl, chg = (x) => (quotes[x] ? (quotes[x].c - quotes[x].o) / quotes[x].o : null);
@@ -2751,6 +2818,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     return list;
   }
   function renderWlHead() {
+    const title = $('#wlTitle');
+    title.textContent = state.watchlists[state.wlIndex].name;
     let tabs = document.getElementById('wlTabs');
     const cols = $('.wl-cols');
     if (!tabs) {
@@ -3714,6 +3783,11 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       cb.addEventListener('change', () => { L[key] = cb.checked; applyLook(); });
       form.appendChild(h('label', {}, h('span', {}, label), cb));
     };
+    form.appendChild(h('div', { class: 'list-group' }, 'Theme'));
+    const themeSel = h('select', {}, THEME_LIST.map(([v, l]) => h('option', { value: v, selected: v === state.theme }, l)));
+    const origTheme = state.theme;
+    themeSel.addEventListener('change', () => { applyTheme(themeSel.value); });
+    form.appendChild(h('label', {}, h('span', {}, 'Theme'), themeSel));
     form.appendChild(h('div', { class: 'list-group' }, 'Candles'));
     color('up', 'Up color');
     color('down', 'Down color');
@@ -3734,7 +3808,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     const m = openModal('Chart settings', form, {
       footer: [h('button', { class: 'btn ghost', onclick: () => { state.look = {}; applyLook(); save(); m.close(); ok = true; openChartSettings(); } }, 'Defaults'), h('span', { class: 'spacer' }),
         h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'), h('button', { class: 'btn primary', onclick: () => { ok = true; save(); m.close(); } }, 'OK')],
-      onClose: () => { if (!ok) { state.look = orig; applyLook(); } },
+      onClose: () => { if (!ok) { state.look = orig; applyLook(); if (state.theme !== origTheme) applyTheme(origTheme); } },
     });
   }
 
@@ -4969,6 +5043,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     toast('Preview: simulated price feed. Download the app for live Binance data. Every tool and indicator works here.', 'info', 9000);
   }
   $('#wlAdd').addEventListener('click', addToWatchlist);
+  $('#wlTitle').addEventListener('click', (e) => { e.stopPropagation(); showWatchlistMenu(e.currentTarget); });
   $('#acrossToggle').addEventListener('click', () => { state.showAcross = !state.showAcross; save(); updateAcross(); refreshAcross(acrossGen); });
   $('#flowToggle').addEventListener('click', () => { state.flow.open = false; save(); updateFlow(); });
   $('#bookBtn').addEventListener('click', () => { state.flow.open = !state.flow.open; save(); updateFlow(); });

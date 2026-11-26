@@ -11,6 +11,24 @@
       line: '#3D8BFD', area: 'rgba(61,139,253,0.25)', drawing: '#3D8BFD', handleFill: '#0F1218',
       alert: '#F5A623', level: 'rgba(154,163,178,0.45)', band: 'rgba(156,106,222,0.07)',
     },
+    ocean: {
+      bg: '#0B1426', grid: 'rgba(110,140,190,0.10)', text: '#8E9CB5', textStrong: '#E1E8F5', border: '#1E2D4A',
+      cross: 'rgba(160,180,215,0.55)', crossLabel: '#22345A', up: '#26B89E', down: '#F25C69',
+      line: '#4C9AFF', area: 'rgba(76,154,255,0.25)', drawing: '#4C9AFF', handleFill: '#0B1426',
+      alert: '#F5A623', level: 'rgba(142,156,181,0.45)', band: 'rgba(120,140,230,0.08)',
+    },
+    slate: {
+      bg: '#17181B', grid: 'rgba(160,160,170,0.08)', text: '#9A9DA6', textStrong: '#E8E9EC', border: '#2C2E34',
+      cross: 'rgba(190,190,200,0.5)', crossLabel: '#33363D', up: '#3FB68B', down: '#EA5455',
+      line: '#8AA4FF', area: 'rgba(138,164,255,0.22)', drawing: '#8AA4FF', handleFill: '#17181B',
+      alert: '#F5A623', level: 'rgba(154,157,166,0.45)', band: 'rgba(150,150,170,0.07)',
+    },
+    paper: {
+      bg: '#FBF7EF', grid: 'rgba(90,70,40,0.08)', text: '#6F6558', textStrong: '#2B2620', border: '#DDD3C0',
+      cross: 'rgba(80,60,40,0.45)', crossLabel: '#4A4035', up: '#2E8B57', down: '#C2413A',
+      line: '#B5651D', area: 'rgba(181,101,29,0.16)', drawing: '#B5651D', handleFill: '#FBF7EF',
+      alert: '#D9822B', level: 'rgba(111,101,88,0.45)', band: 'rgba(181,101,29,0.06)',
+    },
     light: {
       bg: '#FFFFFF', grid: 'rgba(30,40,60,0.07)', text: '#5D6675', textStrong: '#131722', border: '#DDE1E8',
       cross: 'rgba(60,70,90,0.5)', crossLabel: '#3B4252', up: '#159A82', down: '#E5404D',
@@ -115,7 +133,7 @@
 
   // ---- Renko, Kagi and Point & Figure: built from the closes, ignoring time. Each brick, Kagi line or P&F
   // column becomes one "bar" of the chart, stamped with the time it formed.
-  const BRICK_TYPES = new Set(['renko', 'kagi', 'pnf']);
+  const BRICK_TYPES = new Set(['renko', 'kagi', 'pnf', 'linebreak', 'range']);
   function niceSize(v) {
     if (!(v > 0)) return 0;
     const e = Math.pow(10, Math.floor(Math.log10(v))), m = v / e;
@@ -172,6 +190,54 @@
       if (k.up) lastHigh = k.c; else lastLow = k.c;
       return { t: k.t, o: k.o, c: k.c, h: Math.max(k.o, k.c), l: Math.min(k.o, k.c), v: k.v, kagi: { s0, sw, s1: yang } };
     });
+  }
+  // Line break: a new line in the trend's direction when the close goes beyond the last line; a reversal
+  // only when the close goes beyond the extreme of the last `n` lines (3 = the classic three-line break)
+  function lineBreak(raw, n) {
+    const out = [];
+    let first = null;
+    for (const b of raw) {
+      const c = b.c, t = out.length ? Math.max(b.t, out[out.length - 1].t + 1) : b.t;
+      if (!out.length) {
+        if (first === null) { first = c; continue; }
+        if (c === first) continue;
+        out.push({ t, o: first, c, h: Math.max(first, c), l: Math.min(first, c), v: b.v || 0 });
+        continue;
+      }
+      const last = out[out.length - 1], up = last.c > last.o, recent = out.slice(-n);
+      const hi = Math.max(...recent.map((k) => k.h)), lo = Math.min(...recent.map((k) => k.l));
+      let nk = null;
+      if (up ? c > last.c : c < last.c) nk = { o: last.c, c };
+      else if (up ? c < lo : c > hi) nk = { o: last.o, c };
+      if (nk) out.push({ t, ...nk, h: Math.max(nk.o, nk.c), l: Math.min(nk.o, nk.c), v: b.v || 0 });
+      else last.v += b.v || 0;
+    }
+    return out;
+  }
+  // Range bars: every bar spans the same price range, whatever the time. Each candle's path is taken as
+  // open → low → high → close when it rose (open → high → low → close when it fell).
+  function rangeBars(raw, R) {
+    const out = [];
+    if (!raw.length || !(R > 0)) return out;
+    let cur = null;
+    const start = (px, t) => { cur = { t: out.length ? Math.max(t, out[out.length - 1].t + 1) : t, o: px, h: px, l: px, c: px, v: 0 }; out.push(cur); };
+    for (const b of raw) {
+      const path = b.c >= b.o ? [b.o, b.l, b.h, b.c] : [b.o, b.h, b.l, b.c];
+      const n0 = out.length;
+      for (const px of path) {
+        if (!cur) { start(px, b.t); continue; }
+        for (let g = 0; g < 2000; g++) {
+          if (px > cur.h) { const cap = cur.l + R; if (px > cap + R * 1e-9) { cur.h = cap; cur.c = cap; start(cap, b.t); continue; } cur.h = px; }
+          else if (px < cur.l) { const cap = cur.h - R; if (px < cap - R * 1e-9) { cur.l = cap; cur.c = cap; start(cap, b.t); continue; } cur.l = px; }
+          cur.c = px;
+          break;
+        }
+      }
+      // the candle's volume, shared by the range bars it made
+      const made = out.slice(Math.max(0, n0 - 1));
+      for (const k of made) k.v += (b.v || 0) / made.length;
+    }
+    return out;
   }
   // Point & Figure: columns of X (rising) and O (falling), one mark per box; a new column needs a move of
   // `rev` boxes the other way
@@ -393,6 +459,16 @@
         out = kagi(raw, rev, pct);
         this.brickSize = pct ? null : rev;
         this.brickInfo = `Kagi · reversal ${pct ? (rev * 100).toFixed(2).replace(/\.?0+$/, '') + '%' : fmt(rev) + (o.mode === 'fixed' ? '' : ' (ATR 14)')}`;
+      } else if (t === 'linebreak') {
+        const n = Math.max(1, Math.min(10, Math.round(o.lines || 3)));
+        out = lineBreak(raw, n);
+        this.brickSize = null;
+        this.brickInfo = `Line break · ${n} lines`;
+      } else if (t === 'range') {
+        const box = o.mode === 'fixed' && o.size > 0 ? o.size : atrSize(raw);
+        out = rangeBars(raw, box);
+        this.brickSize = box;
+        this.brickInfo = `Range bars · range ${fmt(box)}${o.mode === 'fixed' ? '' : ' (ATR 14)'}`;
       } else {
         const box = o.mode === 'fixed' && o.size > 0 ? o.size : atrSize(raw), rev = Math.max(1, Math.round(o.rev || 3));
         out = pointFigure(raw, box, rev);
@@ -658,7 +734,11 @@
       }
     }
     _pct(v) { return (v / this._base.v - 1) * 100; }
-    _fmtPct(v, dec = 2) { const q = this._pct(v); return (q >= 0 ? '+' : '') + q.toFixed(dec) + '%'; }
+    _fmtPct(v, dec = 2) {
+      const q = this._pct(v);
+      if (this.indexMode) return (100 + q).toFixed(Math.max(dec, 1)); // indexed to 100 at the first bar on screen
+      return (q >= 0 ? '+' : '') + q.toFixed(dec) + '%';
+    }
     _cmpY(c, i) { return this._base.v * (c.values[i] / c._base); } // compare value expressed in main-price units
 
     _drawCompares(p, a, b) {
@@ -889,7 +969,7 @@
       let lo = Infinity, hi = -Infinity;
       const take = (v) => { if (v === v && v !== Infinity && v !== -Infinity) { if (v < lo) lo = v; if (v > hi) hi = v; } };
       if (p === this.main) {
-        const B = this._dispBars(), closeOnly = this.chartType === 'line' || this.chartType === 'area';
+        const B = this._dispBars(), closeOnly = ['line', 'area', 'baseline', 'stepline'].includes(this.chartType);
         for (let i = a; i <= b; i++) { const x = B[i]; if (closeOnly) take(x.c); else { take(x.h); take(x.l); } }
         if (this._base) for (const c of this.compares) if (c.visible && c._base > 0) for (let i = a; i <= b; i++) if (c.values[i] > 0) take(this._cmpY(c, i));
       }
@@ -1185,6 +1265,44 @@
       const ctx = this.ctx, T = this.theme, B = this._dispBars(), sp = this.spacing;
       const type = this.chartType;
       const lo = Math.max(0, a - 1), hi = Math.min(B.length - 1, b + 1);
+      if (type === 'stepline') {
+        ctx.beginPath();
+        for (let i = lo; i <= hi; i++) {
+          const x = this.xAt(i), y = this.yOf(p, B[i].c);
+          if (i === lo) ctx.moveTo(x - sp / 2, y); else ctx.lineTo(x - sp / 2, this.yOf(p, B[i - 1].c)), ctx.lineTo(x - sp / 2, y);
+          ctx.lineTo(x + sp / 2, y);
+        }
+        ctx.strokeStyle = T.line;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        return;
+      }
+      if (type === 'baseline') {
+        // a line around a base level (the close of the first bar on screen): filled green above, red below
+        const base = B[clamp(a, 0, B.length - 1)].c, yb = Math.round(this.yOf(p, base)) + 0.5;
+        const path = () => { ctx.beginPath(); for (let i = lo; i <= hi; i++) { const x = this.xAt(i), y = this.yOf(p, B[i].c); i === lo ? ctx.moveTo(x, y) : ctx.lineTo(x, y); } };
+        for (const [up, y0, y1] of [[true, p.top, yb], [false, yb, p.top + p.h]]) {
+          ctx.save();
+          ctx.beginPath(); ctx.rect(0, y0, this.plotW, y1 - y0); ctx.clip();
+          path();
+          ctx.lineTo(this.xAt(hi), yb); ctx.lineTo(this.xAt(lo), yb); ctx.closePath();
+          ctx.fillStyle = withAlpha(up ? T.up : T.down, 0.14);
+          ctx.fill();
+          path();
+          ctx.strokeStyle = up ? T.up : T.down;
+          ctx.lineWidth = 2;
+          ctx.lineJoin = 'round';
+          ctx.stroke();
+          ctx.restore();
+        }
+        ctx.save();
+        ctx.strokeStyle = T.level;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(0, yb); ctx.lineTo(this.plotW, yb); ctx.stroke();
+        ctx.restore();
+        return;
+      }
       if (type === 'line' || type === 'area') {
         ctx.beginPath();
         for (let i = lo; i <= hi; i++) { const x = this.xAt(i), y = this.yOf(p, B[i].c); i === lo ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
@@ -1209,8 +1327,8 @@
         ctx.lineWidth = 1;
         return;
       }
-      if (type === 'renko') {
-        // bricks touch each other: full width, no wicks
+      if (type === 'renko' || type === 'linebreak') {
+        // bricks (and line-break lines) touch each other: full width, no wicks
         const bw2 = Math.max(1, Math.floor(sp * 0.9));
         for (let i = lo; i <= hi; i++) {
           const k = B[i], up = k.c >= k.o, x0 = Math.round(this.xAt(i) - bw2 / 2);
@@ -1263,6 +1381,9 @@
       }
       let bw = Math.max(1, Math.floor(sp * 0.72));
       if (bw > 2 && bw % 2 === 0) bw -= 1;
+      // volume candles: width by volume, the busiest candle on screen gets the full width
+      let vmax = 0;
+      if (type === 'volcandles') for (let i = lo; i <= hi; i++) if ((B[i].v || 0) > vmax) vmax = B[i].v;
       for (const up of [true, false]) {
         ctx.fillStyle = up ? T.up : T.down;
         ctx.strokeStyle = up ? T.up : T.down;
@@ -1271,6 +1392,18 @@
           if (isUp !== up) continue;
           const x0 = Math.round(this.xAt(i) - bw / 2), wx = x0 + (bw >> 1);
           const yh = this.yOf(p, k.h), yl = this.yOf(p, k.l), yo = this.yOf(p, k.o), yc = this.yOf(p, k.c);
+          if (type === 'hilo') {
+            // high-low: a box from the low to the high
+            const top = Math.round(yh), hh = Math.max(1, Math.round(yl) - top);
+            ctx.fillRect(x0, top, bw, hh);
+            continue;
+          }
+          if (type === 'volcandles') {
+            const w = vmax > 0 ? Math.max(1, Math.round(sp * 0.95 * Math.sqrt((k.v || 0) / vmax))) : bw, xv = Math.round(this.xAt(i) - w / 2);
+            ctx.fillRect(Math.round(this.xAt(i)), Math.round(yh), 1, Math.max(1, Math.round(yl) - Math.round(yh)));
+            ctx.fillRect(xv, Math.round(Math.min(yo, yc)), w, Math.max(1, Math.round(Math.abs(yc - yo))));
+            continue;
+          }
           if (type === 'bars') {
             const tick = Math.max(1, bw >> 1);
             ctx.fillRect(wx, Math.round(yh), 1, Math.max(1, Math.round(yl) - Math.round(yh)));

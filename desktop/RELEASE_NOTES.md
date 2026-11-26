@@ -1,4 +1,11 @@
-## New in 1.20.0
+## New in 1.21.0
+
+- **New chart types**: Baseline, Step line, High-low, Volume candles, Line break and Range bars.
+- **Indexed to 100** price scale (click the % button twice).
+- **Several watchlists**: click the watchlist's name to switch, add, copy, rename or delete lists.
+- **Themes**: Ocean, Slate and Paper next to Dark and Light (Chart settings).
+
+## In 1.20.0
 
 - **Hyperliquid order book and trades**: the **Book** button opens a live order book (grouping, depth bars, spread, bid/ask balance) and a trades feed (big trades highlighted, last minute's buy/sell volume) next to the chart. Click a price in the book to place a paper order there.
 

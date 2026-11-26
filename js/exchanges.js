@@ -667,6 +667,40 @@
           return () => { stopped = true; if (stop) stop(); };
         });
       },
+      // ---- live order book and trades (one WebSocket each; reconnects by itself)
+      // onBook({ bids: [[px, sz, n]…], asks: […], t }) with up to 20 levels a side, grouped to `sigFigs`
+      // significant figures (2–5; 5 = no grouping), optionally `mantissa` 2 or 5 at 5 figures
+      book(b, q, { sigFigs = 5, mantissa = null } = {}, onBook, onStatus) {
+        let stop = null, stopped = false;
+        this.coin(b, q).then((coin) => {
+          if (stopped) return;
+          const sub = { type: 'l2Book', coin, nSigFigs: sigFigs };
+          if (sigFigs === 5 && mantissa) sub.mantissa = mantissa;
+          const lv = (arr) => (arr || []).map((x) => [+x.px, +x.sz, x.n]);
+          stop = socket('wss://api.hyperliquid.xyz/ws', {
+            onOpen: (send) => send({ method: 'subscribe', subscription: sub }),
+            onMessage: (m) => { if (m.channel === 'l2Book' && m.data && m.data.coin === coin) onBook({ bids: lv(m.data.levels[0]), asks: lv(m.data.levels[1]), t: m.data.time }); },
+            onStatus, ping: { every: 30000, msg: { method: 'ping' } },
+          });
+        }, (e) => onStatus && onStatus('error', e.message));
+        return () => { stopped = true; if (stop) stop(); };
+      },
+      // onTrades([{ t, px, sz, buy }]) newest last; the first call has the recent trades
+      trades(b, q, onTrades, onStatus) {
+        let stop = null, stopped = false;
+        this.coin(b, q).then(async (coin) => {
+          if (stopped) return;
+          const map = (x) => ({ t: x.time, px: +x.px, sz: +x.sz, buy: x.side === 'B', id: x.tid });
+          try { const r = await hlPost(this, { type: 'recentTrades', coin }); if (!stopped && Array.isArray(r)) onTrades(r.map(map).sort((a, c) => a.t - c.t)); } catch (e) { /* the stream still comes */ }
+          if (stopped) return;
+          stop = socket('wss://api.hyperliquid.xyz/ws', {
+            onOpen: (send) => send({ method: 'subscribe', subscription: { type: 'trades', coin } }),
+            onMessage: (m) => { if (m.channel === 'trades' && Array.isArray(m.data)) onTrades(m.data.filter((x) => x.coin === coin).map(map)); },
+            onStatus, ping: { every: 30000, msg: { method: 'ping' } },
+          });
+        }, (e) => onStatus && onStatus('error', e.message));
+        return () => { stopped = true; if (stop) stop(); };
+      },
       // every market's prices come in one reply; keep it a few seconds for watchlists with many symbols
       ctxCache: {},
       async contexts(dex) {

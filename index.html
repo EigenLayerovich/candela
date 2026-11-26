@@ -58,6 +58,9 @@
     <button id="tradeBtn" class="hbtn" title="Paper trading: practice with virtual money">
       <svg viewBox="0 0 24 24"><path d="M7 4v16M17 4v16"/><rect x="4.5" y="7" width="5" height="8" rx="1"/><rect x="14.5" y="9" width="5" height="6" rx="1"/></svg><span>Trade</span>
     </button>
+    <button id="bookBtn" class="hbtn" title="Order book and trades" hidden>
+      <svg viewBox="0 0 24 24"><path d="M4 6h9M4 10h6M4 14h11M4 18h7"/><path d="M18 5v14"/></svg><span>Book</span>
+    </button>
     <div class="spacer"></div>
     <button id="pctBtn" class="hbtn small" title="Percent scale">%</button>
     <button id="logBtn" class="hbtn small" title="Logarithmic price scale">log</button>
@@ -91,6 +94,10 @@
       <section id="tester" class="tester hidden" aria-label="Strategy Tester"></section>
       <section id="trading" class="tester hidden" aria-label="Paper trading"></section>
     </section>
+    <aside id="flowSec" class="flow-dock hidden" aria-label="Order book and trades">
+      <div class="side-head"><span id="flowCtl" class="flow-ctl"></span><button id="flowToggle" class="icon-btn" title="Hide the order book">✕</button></div>
+      <div id="flowBody" class="scroll flow"></div>
+    </aside>
     <aside id="side" class="side">
       <div class="side-sec grow">
         <div class="side-head"><span>Watchlist</span><button id="wlAdd" class="icon-btn" title="Add symbol">+</button></div>

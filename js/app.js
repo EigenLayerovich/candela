@@ -1436,6 +1436,7 @@
     $('#sideBtn').classList.toggle('active', state.sideOpen);
     for (const r of document.querySelectorAll('.wl-row')) r.classList.toggle('active', r.dataset.sym === sym);
     updateAcross();
+    updateFlow();
   }
 
   // ---- Renko / Kagi / Point & Figure settings: box size (Auto = 14-bar ATR, or fixed), reversal
@@ -2865,6 +2866,116 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
 
   // ---- the chart's coin on every exchange (side panel): price, 24h change, and the gap to this chart
   let acrossKey = null, acrossBase = '', acrossRows = [], acrossTimer = null, acrossGen = 0;
+
+  // ---- Order book and trades (side panel), for exchanges that stream them (Hyperliquid)
+  state.flow = { open: true, tab: 'book', group: 0, usd: false, big: 50000, ...state.flow };
+  const flow = { key: null, stopBook: null, stopTrades: null, book: null, trades: [], timer: null, status: '', ex: null, b: null, q: null, mid: null };
+  const flowSupported = (sym) => { const ex = exOf(sym); return !!(ex && ex.book && ex.trades); };
+  // price groupings offered for the current price: [sigFigs, mantissa, tick]
+  function flowGroups(px) {
+    if (!(px > 0)) return [[5, null, null]];
+    const t5 = Math.pow(10, Math.floor(Math.log10(px)) - 4);
+    return [[5, null, t5], [5, 2, t5 * 2], [5, 5, t5 * 5], [4, null, t5 * 10], [3, null, t5 * 100], [2, null, t5 * 1000]];
+  }
+  const fmtTick = (t) => (t >= 1 ? (+t.toPrecision(3)).toLocaleString() : String(+t.toPrecision(2)));
+  function stopFlow() {
+    if (flow.stopBook) flow.stopBook();
+    if (flow.stopTrades) flow.stopTrades();
+    flow.stopBook = flow.stopTrades = null;
+    flow.key = null;
+  }
+  function updateFlow() {
+    const sec = $('#flowSec'), sym = active ? active.symbol : null;
+    const ok = !PREVIEW && sym && flowSupported(sym) && !(active && active.replay);
+    sec.classList.toggle('hidden', !ok || !state.flow.open);
+    $('#bookBtn').hidden = !ok;
+    $('#bookBtn').classList.toggle('active', !!(ok && state.flow.open));
+    const run = ok && state.flow.open && !document.hidden;
+    const g = flowGroups(flow.mid)[state.flow.group] || [5, null];
+    const key = run ? `${sym}|${g[0]}|${g[1]}` : null;
+    if (key === flow.key) { renderFlow(); return; }
+    const sameSym = flow.key && key && flow.key.split('|')[0] === sym;
+    stopFlow();
+    if (!run) return;
+    const s = MD.exchangeOf(sym), [, b, q] = /^[A-Z]+:([^/]+)\/(.+)$/.exec(sym);
+    flow.key = key; flow.ex = s; flow.b = b; flow.q = q;
+    if (!sameSym) { flow.book = null; flow.trades = []; flow.mid = null; }
+    flow.status = 'connecting';
+    flow.stopBook = s.book(b, q, { sigFigs: g[0], mantissa: g[1] }, (bk) => {
+      flow.book = bk;
+      const mid = bk.bids[0] && bk.asks[0] ? (bk.bids[0][0] + bk.asks[0][0]) / 2 : null;
+      // the first book tells the price, so the grouping list can be filled in
+      if (mid && !flow.mid) { flow.mid = mid; flowSoon(); return; }
+      flow.mid = mid || flow.mid;
+      flowSoon();
+    }, (st, msg) => { flow.status = msg || st; flowSoon(); });
+    if (!sameSym || !flow.stopTrades) {
+      flow.stopTrades = s.trades(b, q, (list) => {
+        flow.trades.push(...list);
+        if (flow.trades.length > 400) flow.trades.splice(0, flow.trades.length - 400);
+        flowSoon();
+      });
+    }
+    renderFlow();
+  }
+  function flowSoon() {
+    if (flow.timer) return;
+    flow.timer = setTimeout(() => { flow.timer = null; renderFlow(); }, 250);
+  }
+  function renderFlow() {
+    const box = $('#flowBody'), head = $('#flowCtl');
+    if (!box || !flow.key) return;
+    const c = active.chart, F = state.flow, fp = (v) => c.fmtPrice(v);
+    const fs = (v, px) => (F.usd ? fmtVol(v * px) : v >= 1000 ? fmtVol(v) : (+v.toPrecision(4)).toString());
+    // controls
+    head.innerHTML = '';
+    for (const [k, l] of [['book', 'Book'], ['trades', 'Trades']]) head.appendChild(h('button', { class: 'wl-tab' + (F.tab === k ? ' on' : ''), onclick: () => { F.tab = k; save(); renderFlow(); } }, l));
+    if (F.tab === 'book' && flow.mid) {
+      const sel = h('select', { class: 'flow-sel', title: 'Price grouping', onchange: () => { F.group = +sel.value; save(); updateFlow(); } },
+        flowGroups(flow.mid).map(([, , t], i) => h('option', { value: i, selected: i === F.group }, fmtTick(t))));
+      head.appendChild(sel);
+    }
+    if (F.tab === 'trades') {
+      const sel = h('select', { class: 'flow-sel', title: 'Highlight trades worth at least', onchange: () => { F.big = +sel.value; save(); renderFlow(); } },
+        [1000, 10000, 50000, 100000, 500000, 1000000].map((v) => h('option', { value: v, selected: v === F.big }, '≥ $' + fmtVol(v))));
+      head.appendChild(sel);
+    }
+    head.appendChild(h('button', { class: 'wl-tab' + (F.usd ? ' on' : ''), title: 'Sizes in dollars or in the coin', onclick: () => { F.usd = !F.usd; save(); renderFlow(); } }, F.usd ? '$' : flow.b.replace(/^[A-Z]+\./, '')));
+    box.innerHTML = '';
+    if (F.tab === 'book') {
+      const bk = flow.book;
+      if (!bk) { box.appendChild(h('p', { class: 'muted flow-msg' }, flow.status === 'error' ? 'The order book is unavailable right now.' : 'Connecting…')); return; }
+      const N = 12, asks = bk.asks.slice(0, N), bids = bk.bids.slice(0, N);
+      let ca = 0, cb = 0;
+      const askRows = asks.map(([px, sz]) => [px, sz, (ca += sz)]), bidRows = bids.map(([px, sz]) => [px, sz, (cb += sz)]);
+      const mx = Math.max(ca, cb) || 1;
+      const row = (side) => ([px, sz, tot]) => h('div', { class: 'ob-row ' + side, title: `Paper ${side === 'bid' ? 'buy' : 'sell'} limit at ${fp(px)}`, onclick: () => openOrderTicket(active, { side: side === 'bid' ? 'buy' : 'sell', type: 'limit', price: px }) },
+        h('i', { class: 'ob-bar', style: `width:${(tot / mx) * 100}%` }), h('span', { class: 'ob-px' }, fp(px)), h('span', {}, fs(sz, px)), h('span', { class: 'muted' }, fs(tot, px)));
+      const spread = asks[0] && bids[0] ? asks[0][0] - bids[0][0] : null;
+      const bidPct = ca + cb ? (100 * cb) / (ca + cb) : 50;
+      box.append(
+        h('div', { class: 'ob-cols muted' }, h('span', {}, 'Price'), h('span', {}, 'Size'), h('span', {}, 'Total')),
+        ...askRows.reverse().map(row('ask')),
+        h('div', { class: 'ob-mid' }, h('b', {}, flow.mid ? fp(flow.mid) : '–'), spread != null ? h('span', { class: 'muted' }, `spread ${fp(spread)} (${((spread / flow.mid) * 100).toFixed(3)}%)`) : null),
+        ...bidRows.map(row('bid')),
+        h('div', { class: 'ob-imb', title: 'Share of the size on each side, over the levels shown' }, h('i', { class: 'up', style: `width:${bidPct}%` }), h('i', { class: 'down', style: `width:${100 - bidPct}%` })),
+        h('div', { class: 'ob-imb-l muted' }, h('span', {}, `Bids ${bidPct.toFixed(0)}%`), h('span', {}, `Asks ${(100 - bidPct).toFixed(0)}%`)));
+    } else {
+      const now = Date.now(), last = flow.trades.filter((t) => now - t.t < 60e3);
+      const bv = last.filter((t) => t.buy).reduce((a, t) => a + t.px * t.sz, 0), sv = last.filter((t) => !t.buy).reduce((a, t) => a + t.px * t.sz, 0);
+      box.append(h('div', { class: 'tr-sum', title: 'Trades in the last 60 seconds: bought at the ask vs sold at the bid' },
+        h('span', { class: 'up' }, `Buys $${fmtVol(bv)}`), h('span', { class: 'muted' }, 'last min'), h('span', { class: 'down' }, `Sells $${fmtVol(sv)}`)),
+      h('div', { class: 'ob-cols muted' }, h('span', {}, 'Price'), h('span', {}, 'Size'), h('span', {}, 'Time')));
+      if (!flow.trades.length) box.appendChild(h('p', { class: 'muted flow-msg' }, 'Waiting for trades…'));
+      for (const t of flow.trades.slice(-80).reverse()) {
+        const usd = t.px * t.sz;
+        box.appendChild(h('div', { class: 'tr-row ' + (t.buy ? 'buy' : 'sell') + (usd >= F.big ? ' big' : '') },
+          h('span', { class: 'ob-px' }, fp(t.px)), h('span', {}, fs(t.sz, t.px)), h('span', { class: 'muted' }, new Date(t.t).toLocaleTimeString(undefined, { hour12: false }))));
+      }
+    }
+  }
+  document.addEventListener('visibilitychange', () => updateFlow());
+
   function updateAcross() {
     const sec = $('#acrossSec');
     const bq = active && !PREVIEW ? MD.baseQuote(active.symbol) : null;
@@ -4859,6 +4970,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   }
   $('#wlAdd').addEventListener('click', addToWatchlist);
   $('#acrossToggle').addEventListener('click', () => { state.showAcross = !state.showAcross; save(); updateAcross(); refreshAcross(acrossGen); });
+  $('#flowToggle').addEventListener('click', () => { state.flow.open = false; save(); updateFlow(); });
+  $('#bookBtn').addEventListener('click', () => { state.flow.open = !state.flow.open; save(); updateFlow(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && acrossKey) refreshAcross(acrossGen); });
   $('#serverBtn').addEventListener('click', () => openServerDialog());
   $('#alertLogBtn').addEventListener('click', openAlertLog);

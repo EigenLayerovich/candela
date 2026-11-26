@@ -1,7 +1,7 @@
 {
   "name": "candela",
   "productName": "Candela",
-  "version": "1.19.0",
+  "version": "1.20.0",
   "description": "Free charting: live crypto and stocks, indicators, custom scripts and alerts",
   "main": "desktop/main.js",
   "author": "Candela",

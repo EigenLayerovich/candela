@@ -1,4 +1,8 @@
-## New in 1.19.0
+## New in 1.20.0
+
+- **Hyperliquid order book and trades**: the **Book** button opens a live order book (grouping, depth bars, spread, bid/ask balance) and a trades feed (big trades highlighted, last minute's buy/sell volume) next to the chart. Click a price in the book to place a paper order there.
+
+## In 1.19.0
 
 - **Hyperliquid**: perpetuals (with hourly funding, mark and oracle price, open interest), the HIP-3 stock, index and commodity perps (TSLA, NVDA, GOLD…), and spot pairs (HYPE/USDC…). Live charts, every timeframe, watchlist, alerts and paper trading. No key needed.
 

@@ -197,6 +197,11 @@ Pick the *Hyperliquid* chip in the symbol search for its perpetuals, or *Hyperli
   candles.
 - Watchlist, comparisons, *Across exchanges* ("Hyperliquid perp" and "Hyperliquid spot"), alerts (also on
   the alert server), paper trading and every indicator work as on the other exchanges.
+- **Order book and trades**: on a Hyperliquid chart the **Book** button (top bar) opens a column next to
+  the chart with the live order book (12 levels a side, sizes, running totals and depth bars, the spread,
+  and the bid/ask balance; group prices by 1, 2, 5, 10, 100…) and a **Trades** tab with every trade as it
+  happens (buys green, sells red, big trades highlighted from a size you pick, and the last minute's buy
+  and sell volume). Sizes in the coin or in dollars. Click a price in the book to place a paper order there.
 - Hyperliquid limits how many requests one computer makes per minute; if a burst hits the limit, Candela
   waits a moment and tries again.
 

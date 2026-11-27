@@ -1,4 +1,9 @@
-## New in 1.27.0
+## New in 1.27.1
+
+- Fixes Interactive Brokers in the Windows app ("The Interactive Brokers module is missing"): a part of the IBKR library was left out of 1.27.0.
+- Corrected setup steps: IB Gateway has no "Enable ActiveX and Socket Clients" setting (its API is always on); only TWS does.
+
+## In 1.27.0
 
 - **Interactive Brokers**: chart stocks, ETFs, indices, futures, forex and metals from your IBKR account, live, through IB Gateway on your computer (read-only: Candela never places orders). Symbol search → Interactive Brokers… to set it up; IBKR results then come first under Stocks, Forex, Metals and Commodities. Watchlist, alerts (also on the alert server), comparisons and paper trading work with them too.
 

@@ -14,7 +14,9 @@ let IBM = null; // the @stoqey/ib module, loaded on first use (it isn't needed w
 function lib() {
   if (!IBM) {
     try { IBM = require('@stoqey/ib'); } catch (e) {
-      throw Object.assign(new Error('The Interactive Brokers module is missing. In the Candela folder run: npm install --omit=dev'), { fatal: true });
+      const missing = e.code === 'MODULE_NOT_FOUND' && /'@stoqey\/ib'/.test(e.message);
+      throw Object.assign(new Error(missing ? 'The Interactive Brokers module is missing. In the Candela folder run: npm install --omit=dev'
+        : `Could not load the Interactive Brokers library (${String(e.message).split('\n')[0]}). Update Candela, or with node server.js run: npm install --omit=dev`), { fatal: true });
     }
   }
   return IBM;

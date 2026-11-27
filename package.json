@@ -1,7 +1,7 @@
 {
   "name": "candela",
   "productName": "Candela",
-  "version": "1.27.0",
+  "version": "1.27.1",
   "description": "Free charting: live crypto and stocks, indicators, custom scripts and alerts",
   "main": "desktop/main.js",
   "author": "Candela",
@@ -15,7 +15,8 @@
     "installer:win-linux": "makensis desktop/installer.nsi"
   },
   "dependencies": {
-    "@stoqey/ib": "1.6.15"
+    "@stoqey/ib": "1.6.15",
+    "rxjs": "7.8.2"
   },
   "devDependencies": {
     "electron": "45.2.3",

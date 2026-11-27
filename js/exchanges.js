@@ -1107,7 +1107,7 @@
   // the price step is the mid price rounded to `sigFigs` significant figures (× `mantissa`), as on Hyperliquid.
   const newBook = () => ({ bids: new Map(), asks: new Map() });
   function setLevels(map, levels) { for (const [p, q] of levels) { const px = +p, sz = +q; if (sz > 0) map.set(px, sz); else map.delete(px); } }
-  function groupedBook(st, { sigFigs = 5, mantissa = null } = {}, n = 20) {
+  function groupedBook(st, { sigFigs = 5, mantissa = null, levels = 20 } = {}, n = levels) {
     const bids = [...st.bids.entries()].sort((x, y) => y[0] - x[0]), asks = [...st.asks.entries()].sort((x, y) => x[0] - y[0]);
     if (!bids.length || !asks.length) return null;
     const mid = (bids[0][0] + asks[0][0]) / 2, tick = Math.pow(10, Math.floor(Math.log10(mid)) - sigFigs + 1) * (sigFigs === 5 && mantissa ? mantissa : 1);
@@ -1192,6 +1192,27 @@
     stop = socket(ws, { onOpen: () => {}, onMessage: (m) => { if (m.e === 'aggTrade') onTrades([row(m)]); }, onStatus });
     return () => { stopped = true; stop(); };
   }
+  // Binance: older aggregated trades, walking back 1,000 at a time from now until `since` (or `maxPages`);
+  // onChunk(trades) for each page, oldest first within it. Returns a stop function.
+  function binanceTradeHistory(fetchPage, since, maxPages, onChunk, onDone) {
+    let stopped = false;
+    (async () => {
+      let fromId = null, pages = 0;
+      try {
+        while (!stopped && pages < maxPages) {
+          const r = await fetchPage(fromId);
+          pages++;
+          if (stopped || !Array.isArray(r) || !r.length) break;
+          onChunk(r.map((x) => ({ t: x.T, px: +x.p, sz: +x.q, buy: !x.m, id: x.a })));
+          if (r[0].T <= since || r[0].a <= 0) break;
+          fromId = Math.max(0, r[0].a - 1000);
+          await new Promise((res) => setTimeout(res, 120)); // gently: Binance weighs these requests
+        }
+        onDone && onDone(null, pages);
+      } catch (e) { onDone && onDone(e, pages); }
+    })();
+    return () => { stopped = true; };
+  }
   const BV_REST = 'https://data-api.binance.vision', BV_WS = 'wss://data-stream.binance.vision/ws/';
   const binanceSpotFlow = (sym) => ({
     book: (opts, onBook, onStatus) => binanceBook({
@@ -1199,6 +1220,7 @@
       snapshot: () => get({ name: 'Binance', cors: true }, `${BV_REST}/api/v3/depth?symbol=${sym}&limit=1000`), futures: false,
     }, opts, onBook, onStatus),
     trades: (onTrades, onStatus) => binanceTrades({ ws: `${BV_WS}${sym.toLowerCase()}@aggTrade`, recent: () => get({ name: 'Binance', cors: true }, `${BV_REST}/api/v3/aggTrades?symbol=${sym}&limit=100`) }, onTrades, onStatus),
+    tradeHistory: (since, maxPages, onChunk, onDone) => binanceTradeHistory((fromId) => get({ name: 'Binance', cors: true }, `${BV_REST}/api/v3/aggTrades?symbol=${sym}&limit=1000${fromId !== null ? '&fromId=' + fromId : ''}`), since, maxPages, onChunk, onDone),
   });
   // Bybit (spot and perpetuals): a 200-level snapshot, then changes, on one WebSocket
   function bybitBook(ex, b, q, opts, onBook, onStatus) {
@@ -1248,13 +1270,15 @@
   BINANCEF.trades = (b, q, onTrades, onStatus) => binanceTrades({
     ws: `wss://fstream.binance.com/market/ws/${(b + q).toLowerCase()}@aggTrade`, recent: () => get(BINANCEF, `${BINANCEF.rest}/fapi/v1/aggTrades?symbol=${b}${q}&limit=100`),
   }, onTrades, onStatus);
+  BINANCEF.tradeHistory = (b, q, since, maxPages, onChunk, onDone) => binanceTradeHistory((fromId) => get(BINANCEF, `${BINANCEF.rest}/fapi/v1/aggTrades?symbol=${b}${q}&limit=1000${fromId !== null ? '&fromId=' + fromId : ''}`), since, maxPages, onChunk, onDone);
   // the order book and trades of any symbol that has them: { unit, book(opts, onBook, onStatus), trades(onTrades, onStatus) }
   function flowFor(sym) {
     const s = parse(sym);
-    if (s) return s.ex.book && s.ex.trades ? { unit: s.b.replace(/^[A-Z]+\./, ''), book: (o, cb, st) => s.ex.book(s.b, s.q, o, cb, st), trades: (cb, st) => s.ex.trades(s.b, s.q, cb, st) } : null;
+    if (s) return s.ex.book && s.ex.trades ? { unit: s.b.replace(/^[A-Z]+\./, ''), ex: s.ex.id, book: (o, cb, st) => s.ex.book(s.b, s.q, o, cb, st), trades: (cb, st) => s.ex.trades(s.b, s.q, cb, st),
+      tradeHistory: s.ex.tradeHistory ? (since, n, cb, done) => s.ex.tradeHistory(s.b, s.q, since, n, cb, done) : null } : null;
     if (MD.isStock(sym) || /^(CSV:|DEMO)/.test(sym || '')) return null;
     const bq = splitBinance(sym);
-    return bq ? { unit: bq.base, ...binanceSpotFlow(sym) } : null;
+    return bq ? { unit: bq.base, ex: 'BINANCE', ...binanceSpotFlow(sym) } : null;
   }
 
   // for other modules (derivatives data): a GET with the same CORS fallback, and Hyperliquid's info endpoint

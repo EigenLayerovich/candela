@@ -23,6 +23,12 @@
       line: '#8AA4FF', area: 'rgba(138,164,255,0.22)', drawing: '#8AA4FF', handleFill: '#17181B',
       alert: '#F5A623', level: 'rgba(154,157,166,0.45)', band: 'rgba(150,150,170,0.07)',
     },
+    gray: {
+      bg: '#26282D', grid: 'rgba(200,200,210,0.08)', text: '#A9ADB6', textStrong: '#EDEEF1', border: '#3A3D44',
+      cross: 'rgba(210,210,220,0.5)', crossLabel: '#454950', up: '#3DBE95', down: '#F06470',
+      line: '#7FA7FF', area: 'rgba(127,167,255,0.22)', drawing: '#7FA7FF', handleFill: '#26282D',
+      alert: '#F5A623', level: 'rgba(169,173,182,0.45)', band: 'rgba(160,160,180,0.08)',
+    },
     paper: {
       bg: '#FBF7EF', grid: 'rgba(90,70,40,0.08)', text: '#6F6558', textStrong: '#2B2620', border: '#DDD3C0',
       cross: 'rgba(80,60,40,0.45)', crossLabel: '#4A4035', up: '#2E8B57', down: '#C2413A',
@@ -36,6 +42,21 @@
       alert: '#E08A00', level: 'rgba(93,102,117,0.45)', band: 'rgba(124,77,210,0.07)',
     },
   };
+
+  // stops from 0 (nothing) to 1 (the most), as [r, g, b]
+  const PALETTES = {
+    Thermal: [[20, 12, 60], [88, 24, 140], [196, 48, 108], [250, 128, 40], [255, 236, 120]],
+    Ice: [[8, 24, 48], [16, 80, 140], [40, 150, 210], [130, 215, 245], [240, 252, 255]],
+    Gold: [[30, 20, 8], [110, 64, 10], [190, 120, 20], [240, 190, 60], [255, 245, 190]],
+    Viridis: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]],
+    Ember: [[40, 4, 4], [120, 12, 12], [200, 50, 20], [245, 140, 40], [255, 230, 160]],
+    Mono: [[30, 30, 34], [80, 80, 88], [140, 140, 150], [200, 200, 208], [255, 255, 255]],
+  };
+  // a palette color for t in 0..1 as [r, g, b]
+  function heatRGB(name, t) {
+    const P = PALETTES[name] || PALETTES.Thermal, x = Math.max(0, Math.min(1, t)) * (P.length - 1), i = Math.min(P.length - 2, Math.floor(x)), f = x - i;
+    return [0, 1, 2].map((k) => Math.round(P[i][k] + (P[i + 1][k] - P[i][k]) * f));
+  }
 
   const DRAW = () => window.CandelaDrawings; // drawing tools (drawings.js)
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -316,6 +337,8 @@
       this.brickOpts = {};    // { renko: { mode: 'atr'|'fixed', size }, kagi: { mode: 'atr'|'pct'|'fixed', value }, pnf: { mode, size, rev } }
       this.brickInfo = '';    // e.g. "Renko · box 250", shown after the title
       this.trades = null;     // strategy trades to mark on the chart (Strategy Tester)
+      this.footprint = null;  // buy and sell volume at each price of each candle (footprint chart type)
+      this.bookHeat = null;   // recorded order books (liquidity heatmap)
       this.picking = null;    // a function waiting for a click on the chart (Bar Replay: pick the start)
       this.measure = null;    // a quick measurement (ruler or Shift+click): { a, b, done }; not saved
       this.onAlertMove = () => {}; // an alert line was dragged to a new price
@@ -414,7 +437,7 @@
 
     setTimeView({ tRight, msPerPx }) {
       if (!this.bars.length || !isFinite(tRight) || !(msPerPx > 0)) return;
-      this.spacing = clamp(this.interval / msPerPx, 1, 80);
+      this.spacing = clamp(this.interval / msPerPx, 1, this.maxSp);
       this.rightOffset = this.timeToIndex(tRight) - this.lastIndex - 0.5;
       this._clampView();
       this._checkHistory();
@@ -428,6 +451,7 @@
       const base = THEMES[name] || THEMES.dark, o = {};
       for (const k of ['up', 'down', 'bg', 'grid', 'cross']) if (LOOK[k]) o[k] = LOOK[k];
       this.theme = { ...base, ...o };
+      if (LOOK.swap) { const u = this.theme.up; this.theme.up = this.theme.down; this.theme.down = u; } // red up, green down
       this.invalidate();
     }
 
@@ -495,6 +519,9 @@
       this.interval = out.length > 1 ? Math.max(this.rawInterval, (out[out.length - 1].t - out[0].t) / (out.length - 1)) : this.rawInterval;
     }
     get isBrick() { return BRICK_TYPES.has(this.chartType); }
+    get maxSp() { return this.chartType === 'footprint' ? 320 : 80; }
+    // footprint data: { fine, bars: Map(candle time -> Map(price key -> [buy, sell])), note }
+    setFootprint(fp) { this.footprint = fp; this.invalidate(); }
 
     setData(bars, interval, { resetView = false, decimals } = {}) {
       this.raw = bars;
@@ -502,8 +529,8 @@
       this.decimals = decimals ?? decimalsFor(bars.length ? bars[bars.length - 1].c : 1);
       this._rebuild();
       if (resetView) {
-        this.spacing = 8;
-        this.rightOffset = 6;
+        this.spacing = this.chartType === 'footprint' ? 96 : 8;
+        this.rightOffset = this.chartType === 'footprint' ? 2 : 6;
         for (const p of this.panes) p.auto = true;
         this._fitBricks();
       }
@@ -540,8 +567,16 @@
       this.recalc();
     }
 
-    setChartType(t) { this.chartType = t; this._rebuild(); this._fitBricks(); this._clampView(); this.recalc(); }
-    setBrickOptions(o) { this.brickOpts = JSON.parse(JSON.stringify(o || {})); if (this.isBrick) { this._rebuild(); this._fitBricks(); this._clampView(); this.recalc(); } }
+    setChartType(t) {
+      const was = this.chartType;
+      this.chartType = t;
+      this._rebuild(); this._fitBricks();
+      // footprint cells need room for numbers; going back, return to a normal zoom
+      if (t === 'footprint' && this.spacing < 60) { this.spacing = 96; this.rightOffset = 2; }
+      if (was === 'footprint' && t !== 'footprint' && this.spacing > 80) { this.spacing = 8; this.rightOffset = 6; }
+      this._clampView(); this.recalc();
+    }
+    setBrickOptions(o) { this.brickOpts = JSON.parse(JSON.stringify(o || {})); if (this.isBrick) { this._rebuild(); this._fitBricks(); this._clampView(); this.recalc(); } else this.invalidate(); }
     // few bricks or columns: zoom in so they fill the chart
     _fitBricks() {
       const n = this.bars.length;
@@ -976,8 +1011,9 @@
     }
 
     resetView() {
-      this.spacing = 8;
-      this.rightOffset = 6;
+      const fp = this.chartType === 'footprint';
+      this.spacing = fp ? 96 : 8;
+      this.rightOffset = fp ? 2 : 6;
       for (const p of this.panes) p.auto = true;
       this.invalidate();
       this._viewChanged();
@@ -1171,12 +1207,12 @@
 
         if (p !== this.main) this._drawLevels(p);
         const inds = this.indicators.filter((i) => i.pane === p && i.visible);
-        for (const ind of inds) if (ind.def.scale === 'volume') this._drawIndicator(ind, p, a, b);
+        for (const ind of inds) if (ind.def.scale === 'volume' || ind.def.underlay) this._drawIndicator(ind, p, a, b);
         if (p === this.main) {
           this._drawPriceSeries(p, a, b);
           if (this._base) this._drawCompares(p, a, b);
         }
-        for (const ind of inds) if (ind.def.scale !== 'volume') this._drawIndicator(ind, p, a, b);
+        for (const ind of inds) if (ind.def.scale !== 'volume' && !ind.def.underlay) this._drawIndicator(ind, p, a, b);
         if (p === this.main) {
           this._drawTrades(p);
           this._drawAlerts(p);
@@ -1259,7 +1295,7 @@
     setVisibleRange(t0, t1) {
       if (!this.bars.length) return;
       const i0 = this.timeToIndex(t0), i1 = Math.min(this.timeToIndex(t1), this.lastIndex);
-      this.spacing = clamp((this.plotW * 0.94) / Math.max(1, i1 - i0 + 1), 0.5, 80); // (down to 2 candles per pixel, so a day of 1m candles fits)
+      this.spacing = clamp((this.plotW * 0.94) / Math.max(1, i1 - i0 + 1), 0.5, this.maxSp); // (down to 2 candles per pixel, so a day of 1m candles fits)
       this.rightOffset = i1 - this.lastIndex + 2;
       this._clampView();
       this._checkHistory();
@@ -1307,6 +1343,8 @@
       const ctx = this.ctx, T = this.theme, B = this._dispBars(), sp = this.spacing;
       const type = this.chartType;
       const lo = Math.max(0, a - 1), hi = Math.min(B.length - 1, b + 1);
+      if (type === 'tpo') { this._drawTPO(p, lo, hi); return; }
+      if (type === 'footprint') { this._drawFootprint(p, lo, hi); return; }
       if (type === 'stepline') {
         ctx.beginPath();
         for (let i = lo; i <= hi; i++) {
@@ -1466,6 +1504,176 @@
       }
     }
 
+    // ---- TPO (market profile): each session's candles become letters (A, B, C…) at every price they
+    // traded, stacked to the right from the session's start; the widest row is the point of control
+    _tpoKey(t) {
+      const iv = this.rawInterval, D = 86400e3, lt = t + tzOffset(t);
+      if (iv <= 3600e3) return Math.floor(lt / D);                // a day of up-to-1-hour periods
+      if (iv <= 4 * 3600e3) return Math.floor((lt / D + 3) / 7);  // a week (Monday) of 2–4 hour periods
+      const d = new Date(lt); return d.getUTCFullYear() * 12 + d.getUTCMonth(); // a month of days
+    }
+    tpoRowSize(p) {
+      const o = this.brickOpts.tpo || {};
+      if (o.mode === 'fixed' && o.size > 0) return o.size;
+      const mid = p.top + p.h / 2;
+      return niceSize(Math.abs(this.vOf(p, mid) - this.vOf(p, mid + 13)) || 1);
+    }
+    _drawTPO(p, lo, hi) {
+      const ctx = this.ctx, T = this.theme, B = this.bars, sp = this.spacing;
+      if (!B.length) return;
+      const rs = this.tpoRowSize(p), va = ((this.brickOpts.tpo || {}).va || 70) / 100;
+      const LET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+      let s0 = lo;
+      while (s0 > 0 && this._tpoKey(B[s0 - 1].t) === this._tpoKey(B[lo].t)) s0--;
+      const font = getComputedStyle(this.el).fontFamily;
+      while (s0 <= hi) {
+        const key = this._tpoKey(B[s0].t);
+        let s1 = s0;
+        while (s1 + 1 < B.length && this._tpoKey(B[s1 + 1].t) === key) s1++;
+        // rows: which periods traded at each price row
+        const rows = new Map();
+        for (let k = s0; k <= s1; k++) {
+          const r0 = Math.floor(B[k].l / rs + 1e-9), r1 = Math.floor(B[k].h / rs - 1e-9);
+          for (let r = r0; r <= Math.max(r0, r1); r++) { let l = rows.get(r); if (!l) rows.set(r, (l = [])); l.push(k - s0); }
+        }
+        const keys = [...rows.keys()].sort((x, y) => x - y);
+        let poc = keys[0], total = 0;
+        const mid = (Math.min(...keys) + Math.max(...keys)) / 2;
+        for (const r of keys) { const n = rows.get(r).length; total += n; if (n > rows.get(poc).length || (n === rows.get(poc).length && Math.abs(r - mid) < Math.abs(poc - mid))) poc = r; }
+        // value area: grow from the point of control toward the busier side until it holds `va` of the letters
+        let vLo = poc, vHi = poc, inVa = rows.get(poc).length;
+        while (inVa < total * va) {
+          const up = rows.has(vHi + 1) ? rows.get(vHi + 1).length : -1, dn = rows.has(vLo - 1) ? rows.get(vLo - 1).length : -1;
+          if (up < 0 && dn < 0) break;
+          if (up >= dn) { vHi++; inVa += Math.max(0, up); } else { vLo--; inVa += Math.max(0, dn); }
+        }
+        const x0 = this.xAt(s0) - sp / 2, xEnd = this.xAt(s1) + sp / 2;
+        if (xEnd >= 0 && x0 <= this.plotW) {
+          // session start line
+          ctx.strokeStyle = T.level; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(Math.round(x0) + 0.5, p.top); ctx.lineTo(Math.round(x0) + 0.5, p.top + p.h); ctx.stroke(); ctx.setLineDash([]);
+          const rowPx = Math.abs(this.yOf(p, (poc + 1) * rs) - this.yOf(p, poc * rs));
+          const letters = sp >= 7 && rowPx >= 8;
+          ctx.font = `600 ${Math.max(8, Math.min(12, Math.floor(Math.min(sp, rowPx) * 0.95)))}px ${font}`;
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          const nPer = s1 - s0 + 1;
+          for (const r of keys) {
+            const yT = this.yOf(p, (r + 1) * rs), yB = this.yOf(p, r * rs);
+            if (yB < p.top || yT > p.top + p.h) continue;
+            const inside = r >= vLo && r <= vHi, list = rows.get(r);
+            if (r === poc) { ctx.fillStyle = withAlpha(T.alert, 0.16); ctx.fillRect(x0, yT, xEnd - x0, yB - yT); }
+            for (let j = 0; j < list.length; j++) {
+              const xx = x0 + j * sp;
+              if (xx > this.plotW) break;
+              // early periods cooler, late periods warmer
+              const hue = 210 - 170 * (list[j] / Math.max(1, nPer - 1));
+              const col = `hsla(${hue}, 70%, ${T.bg.startsWith('#F') ? 42 : 60}%, ${inside ? 0.95 : 0.4})`;
+              if (letters) { ctx.fillStyle = r === poc ? T.alert : col; ctx.fillText(LET[list[j] % LET.length], xx + sp / 2, (yT + yB) / 2 + 0.5); }
+              else { ctx.fillStyle = r === poc ? T.alert : col; ctx.fillRect(xx + (sp > 3 ? 0.5 : 0), yT + (rowPx > 3 ? 0.5 : 0), Math.max(1, sp - (sp > 3 ? 1 : 0)), Math.max(1, yB - yT - (rowPx > 3 ? 1 : 0))); }
+            }
+          }
+          // initial balance (first two periods), the open and the close
+          const ib = B.slice(s0, Math.min(s1, s0 + 1) + 1), ibH = Math.max(...ib.map((x) => x.h)), ibL = Math.min(...ib.map((x) => x.l));
+          ctx.fillStyle = T.line; ctx.fillRect(Math.round(x0) - 3, this.yOf(p, ibH), 2, Math.max(1, this.yOf(p, ibL) - this.yOf(p, ibH)));
+          const yo = this.yOf(p, B[s0].o), yc = this.yOf(p, B[s1].c);
+          ctx.fillStyle = T.textStrong;
+          ctx.beginPath(); ctx.moveTo(x0 - 1, yo); ctx.lineTo(x0 - 7, yo - 4); ctx.lineTo(x0 - 7, yo + 4); ctx.closePath(); ctx.fill();
+          const xc = x0 + Math.max(1, (rows.get(Math.floor(B[s1].c / rs + 1e-9)) || []).length) * sp + 2;
+          ctx.beginPath(); ctx.moveTo(xc, yc); ctx.lineTo(xc + 6, yc - 4); ctx.lineTo(xc + 6, yc + 4); ctx.closePath(); ctx.fill();
+          // point of control across the session
+          const yp = Math.round(this.yOf(p, (poc + 0.5) * rs)) + 0.5;
+          ctx.strokeStyle = T.alert; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(x0 + rows.get(poc).length * sp + 2, yp); ctx.lineTo(xEnd, yp); ctx.stroke(); ctx.setLineDash([]);
+        }
+        s0 = s1 + 1;
+      }
+      ctx.textBaseline = 'middle';
+      ctx.font = '11px ' + font;
+    }
+
+    // ---- footprint: each candle split into price rows, sell volume (aggressive sellers) on the left and
+    // buy volume on the right, shaded by the difference; the busiest row is outlined. Candles without trade
+    // data are drawn as plain candles.
+    fpRowSize(p) {
+      const o = this.brickOpts.footprint || {}, F = this.footprint;
+      if (o.mode === 'fixed' && o.size > 0) return o.size;
+      const mid = p.top + p.h / 2, want = Math.abs(this.vOf(p, mid) - this.vOf(p, mid + 15)) || 1;
+      return Math.max(F && F.fine ? F.fine : 0, niceSize(want));
+    }
+    _drawFootprint(p, lo, hi) {
+      const ctx = this.ctx, T = this.theme, B = this.bars, sp = this.spacing, F = this.footprint;
+      const rs = this.fpRowSize(p), font = getComputedStyle(this.el).fontFamily;
+      const cells = [];
+      let vmax = 0;
+      for (let i = lo; i <= hi; i++) {
+        const m = F && F.bars.get(B[i].t);
+        if (!m || !m.size) { cells.push(null); continue; }
+        const rows = new Map();
+        let buy = 0, sell = 0;
+        for (const [k, v] of m) {
+          const r = Math.floor((k * F.fine) / rs + 1e-9);
+          let c = rows.get(r);
+          if (!c) rows.set(r, (c = [0, 0]));
+          c[0] += v[0]; c[1] += v[1]; buy += v[0]; sell += v[1];
+        }
+        for (const c of rows.values()) vmax = Math.max(vmax, c[0], c[1]);
+        cells.push({ rows, buy, sell });
+      }
+      const rowPx = Math.abs(this.yOf(p, B[hi].c + rs) - this.yOf(p, B[hi].c));
+      const text = sp >= 56 && rowPx >= 10;
+      ctx.font = `${Math.max(9, Math.min(12, Math.floor(rowPx * 0.8)))}px ${font}`;
+      ctx.textBaseline = 'middle';
+      const fmtV = (v) => (v >= 1000 ? fmtCompact(v) : v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v > 0 ? (+v.toPrecision(2)).toString() : '0');
+      for (let i = lo; i <= hi; i++) {
+        const k = B[i], c = cells[i - lo], xc = this.xAt(i);
+        const yh = this.yOf(p, k.h), yl = this.yOf(p, k.l), yo = this.yOf(p, k.o), yc = this.yOf(p, k.c), up = k.c >= k.o;
+        if (!c || sp < 14) {
+          // a plain candle
+          let bw = Math.max(1, Math.floor(Math.min(sp, 24) * 0.72));
+          ctx.fillStyle = up ? T.up : T.down;
+          ctx.fillRect(Math.round(xc), Math.round(yh), 1, Math.max(1, Math.round(yl) - Math.round(yh)));
+          ctx.fillRect(Math.round(xc - bw / 2), Math.round(Math.min(yo, yc)), bw, Math.max(1, Math.round(Math.abs(yc - yo))));
+          continue;
+        }
+        const left = xc - sp / 2 + 1, w = sp - 2, cx0 = left + 6, cw = w - 7, half = cw / 2;
+        // the candle itself, thin, at the left edge
+        ctx.fillStyle = up ? T.up : T.down;
+        ctx.fillRect(Math.round(left + 2), Math.round(yh), 1, Math.max(1, Math.round(yl) - Math.round(yh)));
+        ctx.fillRect(Math.round(left + 1), Math.round(Math.min(yo, yc)), 3, Math.max(1, Math.round(Math.abs(yc - yo))));
+        let poc = null, pv = -1;
+        for (const [r, v] of c.rows) if (v[0] + v[1] > pv) { pv = v[0] + v[1]; poc = r; }
+        for (const [r, v] of c.rows) {
+          const yT = this.yOf(p, (r + 1) * rs), yB = this.yOf(p, r * rs);
+          if (yB < p.top || yT > p.top + p.h) continue;
+          const hh = Math.max(1, yB - yT - (rowPx > 4 ? 1 : 0));
+          // shade each side by its own volume
+          ctx.fillStyle = withAlpha(T.down, 0.1 + 0.75 * (vmax ? v[1] / vmax : 0)); ctx.fillRect(cx0, yT, half - 0.5, hh);
+          ctx.fillStyle = withAlpha(T.up, 0.1 + 0.75 * (vmax ? v[0] / vmax : 0)); ctx.fillRect(cx0 + half + 0.5, yT, half - 0.5, hh);
+          if (r === poc) { ctx.strokeStyle = T.alert; ctx.lineWidth = 1; ctx.strokeRect(Math.round(cx0) + 0.5, Math.round(yT) + 0.5, Math.round(cw) - 1, Math.max(1, Math.round(hh) - 1)); }
+          if (text) {
+            // diagonal imbalance: buyers here vs sellers one row lower (and the reverse), 3 to 1 or more
+            const below = c.rows.get(r - 1), above = c.rows.get(r + 1);
+            const bImb = v[0] > 0 && v[0] >= 3 * (below ? below[1] : 0) && (below ? below[1] : 0) > 0, sImb = v[1] > 0 && v[1] >= 3 * (above ? above[0] : 0) && (above ? above[0] : 0) > 0;
+            const ym = (yT + yB) / 2 + 0.5;
+            ctx.textAlign = 'right'; ctx.fillStyle = sImb ? T.down : T.textStrong; ctx.font = `${sImb ? '700 ' : ''}${Math.max(9, Math.min(12, Math.floor(rowPx * 0.8)))}px ${font}`;
+            ctx.fillText(fmtV(v[1]), cx0 + half - 3, ym);
+            ctx.textAlign = 'left'; ctx.fillStyle = bImb ? T.up : T.textStrong; ctx.font = `${bImb ? '700 ' : ''}${Math.max(9, Math.min(12, Math.floor(rowPx * 0.8)))}px ${font}`;
+            ctx.fillText(fmtV(v[0]), cx0 + half + 3, ym);
+          }
+        }
+        // the candle's delta (buys minus sells) and volume under it
+        if (sp >= 40) {
+          const d = c.buy - c.sell, y = Math.min(p.top + p.h - 20, yl + 12);
+          ctx.textAlign = 'center';
+          ctx.font = `600 10px ${font}`;
+          ctx.fillStyle = d >= 0 ? T.up : T.down;
+          ctx.fillText((d >= 0 ? '+' : '−') + fmtV(Math.abs(d)), xc, y);
+          ctx.fillStyle = T.text; ctx.font = `10px ${font}`;
+          ctx.fillText(fmtV(c.buy + c.sell), xc, y + 12);
+        }
+      }
+      ctx.textAlign = 'left';
+      ctx.font = '11px ' + font;
+    }
+
     _drawIndicator(ind, p, a, b) {
       const ctx = this.ctx, out = ind.out, def = ind.def, sp = this.spacing;
       if (!out) return;
@@ -1594,7 +1802,8 @@
         try {
           def.paint({
             ctx, out, bars: this.bars, params: ind.params, a, b, right: this.plotW, top: p.top, height: p.h, font, textColor: this.theme.text,
-            xAt: (i) => this.xAt(i), xOfTime: (t) => this.xAt(this.timeToIndex(t)), yOf: yfn,
+            xAt: (i) => this.xAt(i), xOfTime: (t) => this.xAt(this.timeToIndex(t)), yOf: yfn, vOf: (y) => this.vOf(p, y),
+            spacing: this.spacing, chart: this, heatRGB, theme: this.theme, fmt: (v) => this.fmtPrice(v),
             color: (k) => ind.colors[k] || ((def.colors || []).find((c) => c.key === k) || {}).color || '#888',
           });
         } catch (e) { console.error(def.id, e); }
@@ -2168,7 +2377,7 @@
               break;
             }
             case 'xscale': {
-              this.spacing = clamp(dr.sp * Math.exp((x - dr.x) * 0.006), 1, 80);
+              this.spacing = clamp(dr.sp * Math.exp((x - dr.x) * 0.006), 1, this.maxSp);
               this._clampView();
               this._checkHistory();
               break;
@@ -2298,7 +2507,7 @@
         } else {
           // At the live edge keep the latest bar pinned; when browsing history zoom around the cursor.
           const ax = reg.r === 'plot' && this.rightOffset < 0 ? x : this.plotW, i = this.idxAt(ax);
-          const ns = clamp(this.spacing * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0018)), 1, 80);
+          const ns = clamp(this.spacing * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0018)), 1, this.maxSp);
           const ro = this.rightOffset;
           this.spacing = ns;
           this.rightOffset = ax === this.plotW ? ro : i - this.lastIndex - 0.5 + (this.plotW - ax) / ns;
@@ -2370,5 +2579,5 @@
     }
   }
 
-  window.CandelaChart = { Chart, THEMES, decimalsFor, fmtCompact, setTimeZone, tzOffset, setLook };
+  window.CandelaChart = { Chart, THEMES, PALETTES, heatRGB, decimalsFor, fmtCompact, setTimeZone, tzOffset, setLook, niceSize };
 })();

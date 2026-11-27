@@ -177,7 +177,7 @@
   state.stocks = { key: '', perMin: 8, perDay: 800, ...state.stocks };
   MD.stockConfig(state.stocks);
   const quotes = {}, lastPx = {};
-  const THEME_LIST = [['dark', 'Dark', 'dark'], ['ocean', 'Ocean (dark blue)', 'dark'], ['slate', 'Slate (dark grey)', 'dark'], ['light', 'Light', 'light'], ['paper', 'Paper (warm light)', 'light']];
+  const THEME_LIST = [['dark', 'Dark', 'dark'], ['ocean', 'Ocean (dark blue)', 'dark'], ['slate', 'Slate (dark grey)', 'dark'], ['gray', 'Gray (medium)', 'dark'], ['light', 'Light', 'light'], ['paper', 'Paper (warm beige)', 'light']];
   const toneOf = (t) => (THEME_LIST.find((x) => x[0] === t) || THEME_LIST[0])[2];
   function applyTheme(t) {
     if (!THEME_LIST.some((x) => x[0] === t)) t = 'dark';
@@ -186,13 +186,24 @@
     document.documentElement.dataset.theme = t;
     document.documentElement.dataset.tone = toneOf(t);
     for (const sl of slots) sl.chart.setTheme(t);
+    swapCssColors();
+  }
+  // red up, green down (as in much of Asia): the page's colors follow the charts'
+  function swapCssColors() {
+    const st = document.documentElement.style;
+    st.removeProperty('--up'); st.removeProperty('--down');
+    if (!(state.look && state.look.swap)) return;
+    const cs = getComputedStyle(document.documentElement), up = cs.getPropertyValue('--up').trim(), down = cs.getPropertyValue('--down').trim();
+    st.setProperty('--up', down); st.setProperty('--down', up);
   }
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.dataset.tone = toneOf(state.theme);
+  swapCssColors();
 
   // ------------------------------------------------------------------ custom script registry
   const CS = window.CandelaScript;
   const AL = window.CandelaAlerts;
+  const FR = window.CandelaFlowRec, SCR = window.CandelaScreener;
   const DV = window.CandelaDerivs;
   const scriptDefs = new Map(); // script id -> compiled indicator definition
   function compileSaved(sc) {
@@ -322,6 +333,7 @@
     }
     persistIndicators() {
       this.syncExt();
+      this.syncFlowRec();
       const c = this.chart, order = (i) => c.panes.indexOf(i.pane);
       this.cfg.indicators = [...c.indicators].sort((a, b) => order(a) - order(b)).map((i) => ({
         type: i.def.id, params: i.params, colors: i.colors, visible: i.visible, tf: i.tf || undefined,
@@ -479,6 +491,36 @@
       this.chart.setInfo('');
     }
 
+    // ---- trades for the footprint chart type, order books for the liquidity heatmap (recorded live)
+    syncFlowRec() {
+      const c = this.chart, live = this.mode === 'live' && !PREVIEW && !this.replay, sym = this.symbol, tf = this.tf;
+      const wantFp = live && this.cfg.chartType === 'footprint' && !!MD.flowFor(sym);
+      const fpKey = wantFp ? sym + '|' + tf : null;
+      if (this.fpKey !== fpKey) {
+        if (this.fpStop) this.fpStop();
+        this.fpStop = null; this.fpKey = fpKey;
+        c.setFootprint(null);
+        if (fpKey) {
+          const last = c.raw.length ? c.raw[c.raw.length - 1].c : 1;
+          this.fpStop = FR.footprint(sym, tf, last, (D) => { if (this.fpKey === fpKey) { c.setFootprint(D); } });
+        }
+      }
+      const wantBook = live && c.indicators.some((i) => i.def.live === 'book') && !!MD.flowFor(sym);
+      const bookKey = wantBook ? sym : null;
+      if (this.bookKey !== bookKey) {
+        if (this.bookStop) this.bookStop();
+        this.bookStop = null; this.bookKey = bookKey;
+        c.bookHeat = null; c.invalidate();
+        if (bookKey) this.bookStop = FR.bookHeat(sym, (R) => { if (this.bookKey === bookKey) { c.bookHeat = R; c.invalidate(); } });
+      }
+    }
+    stopFlowRec() {
+      if (this.fpStop) this.fpStop();
+      if (this.bookStop) this.bookStop();
+      this.fpStop = this.bookStop = null;
+      this.fpKey = this.bookKey = null;
+    }
+
     // replace all indicators (undo, templates)
     setIndicators(list) {
       const c = this.chart;
@@ -588,6 +630,7 @@
       this.stopTfFeeds();
       c.clearTfSources();
       this.stopInfo();
+      this.stopFlowRec();
       this.cfg.symbol = sym;
       this.cfg.tf = tf;
       c.tfKey = tf;
@@ -679,6 +722,7 @@
       this.startCompares();
       this.syncTfFeeds();
       this.startInfo();
+      this.syncFlowRec();
       resetHistory(this);
       primeChartAlerts(this);
       if (MD.isBStock(sym) && !state.bstockNoteSeen) {
@@ -1402,9 +1446,16 @@
     $('#chartType').addEventListener('change', (e) => {
       active.cfg.chartType = e.target.value;
       active.chart.setChartType(e.target.value);
+      active.syncFlowRec();
       save();
       updateHeader();
       e.target.blur();
+      if (e.target.value === 'footprint') {
+        const sym = active.symbol;
+        if (!MD.flowFor(sym)) toast(`Footprints need trade data: they work on Binance, Binance Futures, Bybit and Hyperliquid charts. ${bare(sym)} shows plain candles.`, 'warn', 8000);
+        else if (!state.fpNoteSeen) { state.fpNoteSeen = true; save(); toast('Footprint: each candle split into price rows, sellers (left) and buyers (right), the busiest row outlined, and the candle\'s delta below. Binance markets load the last ~30–60k trades; elsewhere footprints fill in from now on. Zoom in for the numbers; "Rows…" sets the row size.', 'info', 12000); }
+      }
+      if (e.target.value === 'tpo' && !state.tpoNoteSeen) { state.tpoNoteSeen = true; save(); toast('TPO: every session (a day for up-to-1-hour candles, a week for 2–4 hours, a month for days) as a market profile. Each candle is a letter at every price it traded; the widest row is the point of control (orange), the bright rows the value area, the blue bar on the left the initial balance. "Rows…" sets the row size.', 'info', 12000); }
       if (active.chart.isBrick && !state.brickNoteSeen) {
         state.brickNoteSeen = true;
         save();
@@ -1472,7 +1523,8 @@
     more.classList.toggle('active', inMore);
     more.classList.toggle('wide', inMore && tfName(tf).length > 3);
     $('#chartType').value = active.cfg.chartType || 'candles';
-    $('#brickBtn').hidden = !active.chart.isBrick;
+    $('#brickBtn').hidden = !active.chart.isBrick && !['tpo', 'footprint'].includes(active.cfg.chartType);
+    $('#brickBtn').textContent = ['tpo', 'footprint'].includes(active.cfg.chartType) ? 'Rows…' : 'Box…';
     $('#replayBtn').classList.toggle('active', !!active.replay || !!active.chart.picking);
     $('#replayBtn span').textContent = active.replay ? 'Exit replay' : 'Replay';
     $('#replayBtn').title = active.replay ? 'Exit the replay and go back to live data' : 'Bar Replay: play history back candle by candle';
@@ -1495,14 +1547,34 @@
   // ---- Renko / Kagi / Point & Figure settings: box size (Auto = 14-bar ATR, or fixed), reversal
   function openBrickSettings() {
     const slot = active, c = slot.chart, type = slot.cfg.chartType;
-    if (!c.isBrick) return;
+    const profile = type === 'tpo' || type === 'footprint';
+    if (!c.isBrick && !profile) return;
     const orig = clone(slot.cfg.brick || {}), all = clone(orig), o = all[type] || (all[type] = {});
     const apply = () => { c.setBrickOptions(all); };
     const auto = c.brickSize;
     const form = h('div', { class: 'form' });
     const num = (value, step) => h('input', { type: 'number', value, min: 0, step: step || 'any' });
     const row = (label, ...ctl) => form.appendChild(h('label', {}, h('span', {}, label), h('span', { class: 'tf-pick' }, ...ctl)));
-    if (type === 'linebreak') {
+    if (profile) {
+      // row height in price: automatic (about 13–15 pixels, following the zoom) or fixed
+      const cur = type === 'tpo' ? c.tpoRowSize(c.main) : c.fpRowSize(c.main);
+      const mode = h('select', {}, h('option', { value: 'auto' }, 'Auto (follows the zoom)'), h('option', { value: 'fixed' }, 'Fixed'));
+      mode.value = o.mode === 'fixed' ? 'fixed' : 'auto';
+      const size = num(o.size || +cur.toPrecision(4));
+      const sync = () => { size.disabled = mode.value !== 'fixed'; o.mode = mode.value; if (mode.value === 'fixed') o.size = +size.value; apply(); };
+      mode.addEventListener('change', sync);
+      size.addEventListener('input', () => { if (+size.value > 0) { o.size = +size.value; apply(); } });
+      size.disabled = mode.value !== 'fixed';
+      row('Row size', mode, size);
+      if (type === 'tpo') {
+        const va = num(o.va || 70, 1);
+        va.addEventListener('input', () => { const v = Math.round(+va.value); if (v >= 10 && v <= 100) { o.va = v; apply(); } });
+        row('Value area (%)', va);
+      }
+      form.appendChild(h('p', { class: 'muted' }, type === 'tpo'
+        ? 'Each candle of a session is a letter (A, B, C…) at every price row it traded. The widest row is the point of control; the brighter rows hold the value area (70% of the letters). The blue bar left of each session is the initial balance (its first two candles); the arrows mark the open and the close.'
+        : `Sellers (aggressive sells) on the left, buyers on the right of each row. Bold numbers are imbalances: three times the volume of the other side one row away. ${c.footprint && c.footprint.note ? c.footprint.note + '.' : ''}`));
+    } else if (type === 'linebreak') {
       const lines = num(o.lines || 3, 1);
       lines.addEventListener('input', () => { const v = Math.round(+lines.value); if (v >= 1 && v <= 10) { o.lines = v; apply(); } });
       row('Lines to break', lines);
@@ -1538,12 +1610,13 @@
     }
     form.appendChild(h('p', { class: 'muted' }, type === 'renko'
       ? 'A new brick when the close moves one box beyond the last brick; it takes two boxes to turn around.'
+      : profile ? ''
       : type === 'linebreak' ? 'A new line when the close goes beyond the last line in the trend\'s direction; the trend turns only when the close goes beyond the high or low of this many lines (3 is the classic three-line break).'
       : type === 'range' ? 'Every bar spans this price range, however long it takes. Built from the candles\' open, high, low and close, so the order of moves inside one candle is assumed.'
       : type === 'kagi' ? 'The line turns when price reverses by this amount. It is thick and green after rising above the previous high, thin and red after falling below the previous low.'
         : 'An X for each box price rises, an O for each box it falls; a new column after the reversal number of boxes.'));
     let ok = false;
-    const m = openModal({ renko: 'Renko', kagi: 'Kagi', pnf: 'Point & Figure', linebreak: 'Line break', range: 'Range bars' }[type] + ' settings', form, {
+    const m = openModal({ renko: 'Renko', kagi: 'Kagi', pnf: 'Point & Figure', linebreak: 'Line break', range: 'Range bars', tpo: 'TPO', footprint: 'Footprint' }[type] + ' settings', form, {
       footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Cancel'),
         h('button', { class: 'btn primary', onclick: () => { ok = true; slot.cfg.brick = all; save(); m.close(); } }, 'OK')],
       onClose: () => { if (!ok) c.setBrickOptions(orig); },
@@ -3148,11 +3221,121 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
       for (const b of tabs.children) b.classList.toggle('active', b.dataset.k === k);
       const box = h('div', { class: 'mk-body' });
       body.replaceChildren(tabs, box);
-      ({ funding: marketFunding, rsi: marketRsi, fng: marketFng })[k](box);
+      ({ screener: marketScreener, matrix: marketMatrix, funding: marketFunding, rsi: marketRsi, fng: marketFng })[k](box);
     };
-    for (const [k, l] of [['funding', 'Funding rates'], ['rsi', 'RSI heatmap'], ['fng', 'Fear & Greed']]) tabs.appendChild(h('button', { class: 'tab', 'data-k': k, onclick: () => show(k) }, l));
+    for (const [k, l] of [['screener', 'Screener'], ['matrix', 'Market matrix'], ['funding', 'Funding rates'], ['rsi', 'RSI heatmap'], ['fng', 'Fear & Greed']]) tabs.appendChild(h('button', { class: 'tab', 'data-k': k, onclick: () => show(k) }, l));
     openModal('Market', body, { wide: true, cls: 'mk-modal' });
     show(state.marketTab);
+  }
+  // ---- screener: every perpetual on an exchange, with presets and sortable columns
+  const scr = {}; // venue -> { at, rows, done, total, error, running }
+  function screenData(venue, onChange) {
+    const cur = scr[venue];
+    if (cur && (cur.running || Date.now() - cur.at < 90e3)) return cur;
+    const st = (scr[venue] = { at: Date.now(), rows: cur ? cur.rows : [], done: 0, total: 0, error: null, running: true });
+    SCR.scan(venue, { top: state.scrTop || 100, onProgress: (rows, done, total) => { st.rows = rows; st.done = done; st.total = total; onChange(); }, isStopped: () => scr[venue] !== st })
+      .then(() => { st.running = false; st.at = Date.now(); onChange(); }, (e) => { st.running = false; st.error = e.geo ? 'blocked in your region' : e.needsServer ? 'needs the Windows app or node server.js' : e.message; onChange(); });
+    return st;
+  }
+  const SCR_COLS = [
+    ['coin', 'Pair', null], ['last', 'Last', 'price'], ['chg1h', '1h', 'pct'], ['chg4h', '4h', 'pct'], ['chg24', '24h', 'pct'], ['turnover', 'Volume 24h', 'usd'],
+    ['relvol', 'Rel. vol', 'x', 'The last hour\'s volume compared with the average hour of the day before'], ['oi', 'Open interest', 'usd'], ['oi1h', 'OI 1h', 'pct'], ['oi24h', 'OI 24h', 'pct'],
+    ['fund8', 'Funding', 'fund', '% per 8 hours (Hyperliquid pays every hour: shown × 8)'], ['signal', 'OI signal', null, 'Price and open interest over the hour: both up, longs opening; price down and OI up, shorts opening; price up and OI down, shorts covering; both down, longs closing'],
+    ['rsi', 'RSI 1h', 'num'], ['buy1h', 'Buys 1h', 'pctplain', 'Share of the last hour\'s volume bought by takers (Binance)'], ['range24', 'Range 24h', 'pctplain'],
+  ];
+  function marketScreener(box) {
+    const venueSel = h('select', {}, Object.entries(SCR.VENUES).map(([k, v]) => h('option', { value: k }, v.name)));
+    venueSel.value = state.scrVenue || 'BINANCEF';
+    const presetSel = h('select', {}, SCR.PRESETS.map(([n], i) => h('option', { value: i }, n)));
+    presetSel.value = String(state.scrPreset || 0);
+    const topSel = h('select', { title: 'Hourly numbers for the busiest markets' }, [50, 100, 200].map((n) => h('option', { value: n }, `Top ${n}`)));
+    topSel.value = String(state.scrTop || 100);
+    const find = h('input', { class: 'search scr-find', placeholder: 'Filter: BTC, SOL…', spellcheck: 'false' });
+    const info = h('span', { class: 'muted' }), table = h('table', { class: 'tt-table mk-table scr-table' });
+    let sort = null;
+    const fmt = (k, v) => {
+      if (v == null || (typeof v === 'number' && !isFinite(v))) return '–';
+      if (k === 'price') return v >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : (+v.toPrecision(5)).toString();
+      if (k === 'pct') return (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(2) + '%';
+      if (k === 'pctplain') return v.toFixed(1) + '%';
+      if (k === 'usd') return '$' + fmtVol(v);
+      if (k === 'x') return v.toFixed(2) + '×';
+      if (k === 'fund') return (v >= 0 ? '' : '−') + Math.abs(v).toFixed(4) + '%';
+      if (k === 'num') return v.toFixed(1);
+      return String(v);
+    };
+    const render = () => {
+      const venue = venueSel.value, D = scr[venue];
+      if (!D) return;
+      const [, test, key, desc] = SCR.PRESETS[+presetSel.value];
+      const q = find.value.trim().toUpperCase();
+      let rows = D.rows.filter((r) => (!test || test(r)) && (!q || r.coin.includes(q)));
+      const sk = sort ? sort.key : key, sd = sort ? sort.desc : desc;
+      rows.sort((a, b) => {
+        const x = a[sk], y = b[sk];
+        if (sk === 'coin' || sk === 'signal') return (sd ? -1 : 1) * String(x || '').localeCompare(String(y || ''));
+        const nx = x == null || !isFinite(x), ny = y == null || !isFinite(y);
+        if (nx || ny) return nx - ny;
+        return sd ? y - x : x - y;
+      });
+      rows = rows.slice(0, 200);
+      const cls = (k, v) => (k === 'pct' || k === 'fund') && v != null ? (v >= 0 ? 'up' : 'down') : '';
+      const sigCls = { 'Longs opening': 'up', 'Shorts covering': 'up', 'Shorts opening': 'down', 'Longs closing': 'down' };
+      table.replaceChildren(
+        h('thead', {}, h('tr', {}, SCR_COLS.map(([k, l, , tip]) => h('th', { class: 'scr-th' + (sk === k ? ' on' : ''), title: tip || 'Sort', onclick: () => { sort = { key: k, desc: sk === k ? !sd : k !== 'coin' }; render(); } }, l, sk === k ? (sd ? ' ↓' : ' ↑') : '')))),
+        h('tbody', {}, rows.map((r) => h('tr', { title: `Open ${r.coin} on ${SCR.VENUES[venue].name}`, onclick: () => { closeModal(); openSymbol(r.id); } },
+          SCR_COLS.map(([k, , f]) => {
+            const v = r[k];
+            if (k === 'coin') return h('td', {}, h('b', {}, r.coin));
+            if (k === 'signal') return h('td', { class: sigCls[v] || 'muted' }, v || '–');
+            if (k === 'relvol' && v >= 2) return h('td', { class: 'scr-hot' }, fmt(f, v));
+            if (k === 'rsi' && v != null) return h('td', { class: v >= 70 ? 'down' : v <= 30 ? 'up' : '' }, fmt(f, v));
+            return h('td', { class: cls(f, v) }, fmt(f, v));
+          })))));
+      info.textContent = D.error ? `${SCR.VENUES[venue].name}: ${D.error}` : `${rows.length} of ${D.rows.length} markets` + (D.running ? ` · hourly numbers ${D.done}/${D.total}…` : ` · updated ${new Date(D.at).toLocaleTimeString(undefined, { hour12: false })}`);
+    };
+    const load = () => { state.scrVenue = venueSel.value; state.scrTop = +topSel.value; save(); screenData(venueSel.value, () => { if (table.isConnected) render(); }); render(); };
+    venueSel.addEventListener('change', load);
+    topSel.addEventListener('change', () => { delete scr[venueSel.value]; load(); });
+    presetSel.addEventListener('change', () => { state.scrPreset = +presetSel.value; save(); sort = null; render(); });
+    find.addEventListener('input', render);
+    box.append(h('div', { class: 'mk-bar' }, venueSel, presetSel, topSel, find, h('button', { class: 'btn small-btn', title: 'Refresh now', onclick: () => { delete scr[venueSel.value]; load(); } }, '↻'), info),
+      h('div', { class: 'tt-table-wrap mk-scroll' }, table),
+      h('p', { class: 'muted small' }, 'Click a column to sort, a row to open its chart. Hourly numbers (1h, 4h, relative volume, open interest change, RSI) are for the busiest markets; Hyperliquid\'s open interest change comes from Candela\'s own samples, so it appears after the screener has run for an hour.'));
+    load();
+    // keep it fresh while it's open
+    const timer = setInterval(() => { if (!table.isConnected) { clearInterval(timer); return; } const D = scr[venueSel.value]; if (D && !D.running && Date.now() - D.at > 90e3) load(); }, 15e3);
+  }
+  // ---- market matrix: the busiest markets as tiles sized by 24h volume, colored by a change
+  function marketMatrix(box) {
+    const venueSel = h('select', {}, Object.entries(SCR.VENUES).map(([k, v]) => h('option', { value: k }, v.name)));
+    venueSel.value = state.scrVenue || 'BINANCEF';
+    const metricSel = h('select', {}, [['chg1h', '1h change'], ['chg24', '24h change'], ['oi1h', 'Open interest 1h'], ['fund8', 'Funding']].map(([k, l]) => h('option', { value: k }, l)));
+    metricSel.value = state.matrixMetric || 'chg1h';
+    const nSel = h('select', {}, [24, 36, 60, 100].map((n) => h('option', { value: n }, `Top ${n}`)));
+    nSel.value = String(state.matrixN || 36);
+    const area = h('div', { class: 'mx-area' }), info = h('span', { class: 'muted' });
+    const render = () => {
+      const D = scr[venueSel.value];
+      if (!D || !area.isConnected) return;
+      const metric = metricSel.value, list = D.rows.slice(0, +nSel.value);
+      const W = area.clientWidth || 900, Hh = 460;
+      area.style.height = Hh + 'px';
+      const full = metric === 'fund8' ? 0.05 : metric === 'chg24' ? 8 : metric === 'oi1h' ? 5 : 3; // full color at this %
+      const tiles = SCR.treemap(list.map((r) => ({ w: r.turnover, r })), W, Hh);
+      area.replaceChildren(...tiles.map(({ x, y, w, h: th, item }) => {
+        const r = item.r, v = r[metric], a = v == null || !isFinite(v) ? 0 : Math.min(1, Math.abs(v) / full);
+        const bg = v == null || !isFinite(v) ? 'var(--panel-2)' : v >= 0 ? `rgba(34,171,148,${0.15 + a * 0.75})` : `rgba(247,82,95,${0.15 + a * 0.75})`;
+        const big = w > 70 && th > 40, val = v == null || !isFinite(v) ? '–' : (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(metric === 'fund8' ? 4 : 2) + '%';
+        return h('button', { class: 'mx-tile', style: `left:${x}px;top:${y}px;width:${Math.max(0, w - 2)}px;height:${Math.max(0, th - 2)}px;background:${bg}`, title: `${r.coin}: ${val} · volume $${fmtVol(r.turnover)}. Click to open.`, onclick: () => { closeModal(); openSymbol(r.id); } },
+          w > r.coin.length * 7.5 + 6 && th > 18 ? h('b', { style: big ? `font-size:${Math.min(22, Math.max(11, Math.sqrt(w * th) / 7))}px` : '' }, r.coin) : null, big ? h('span', {}, val) : null);
+      }));
+      info.textContent = D.error ? D.error : D.running && metric !== 'chg24' && metric !== 'fund8' ? `Loading hourly numbers ${D.done}/${D.total}…` : `Area: 24h volume · ${list.length} markets`;
+    };
+    const load = () => { state.scrVenue = venueSel.value; state.matrixMetric = metricSel.value; state.matrixN = +nSel.value; save(); screenData(venueSel.value, render); render(); };
+    for (const el of [venueSel, metricSel, nSel]) el.addEventListener('change', load);
+    box.append(h('div', { class: 'mk-bar' }, venueSel, metricSel, nSel, info), area);
+    setTimeout(load, 0);
   }
   const coinsOfInterest = () => {
     const mine = [active.symbol, ...state.watchlist].map((x) => DV.coinOf(x)).filter(Boolean);
@@ -4191,6 +4374,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
   function applyLook() {
     CC.setLook(state.look);
     for (const s of slots) s.chart.setTheme(state.theme);
+    swapCssColors();
   }
   function openChartSettings() {
     const orig = clone(state.look || {}), L = (state.look = clone(orig));
@@ -4216,6 +4400,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     form.appendChild(h('div', { class: 'list-group' }, 'Candles'));
     color('up', 'Up color');
     color('down', 'Down color');
+    check('swap', 'Red up, green down', false);
     form.appendChild(h('div', { class: 'list-group' }, 'Background'));
     color('bg', 'Background');
     check('hgrid', 'Horizontal grid lines');

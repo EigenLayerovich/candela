@@ -1318,6 +1318,42 @@
     for (let i = 0; i < n && S.length && bars[i].t + (i + 1 < n ? bars[i + 1].t - bars[i].t : 0) <= S[0].t; i++) out[i] = NaN;
     return out;
   }
+  // ---- heatmaps: a grid of values -> a small image in the chosen palette
+  const HEAT_PALETTE = { key: 'palette', label: 'Colors', type: 'select', options: ['Thermal', 'Ice', 'Gold', 'Viridis', 'Ember', 'Mono'], def: 'Thermal' };
+  const HEAT_CONTRAST = { key: 'contrast', label: 'Brightness', type: 'int', def: 5, min: 1, max: 10 };
+  const HEAT_CELL = { key: 'cell', label: 'Row height (px)', type: 'int', def: 3, min: 1, max: 12 };
+  function heap(before) {
+    const h = [];
+    const up = (i) => { while (i > 0) { const q = (i - 1) >> 1; if (!before(h[i], h[q])) break; [h[i], h[q]] = [h[q], h[i]]; i = q; } };
+    const down = (i) => { for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < h.length && before(h[l], h[m])) m = l; if (r < h.length && before(h[r], h[m])) m = r; if (m === i) break; [h[i], h[m]] = [h[m], h[i]]; i = m; } };
+    return { size: () => h.length, peek: () => h[0], push: (x) => { h.push(x); up(h.length - 1); }, pop: () => { const t = h[0], e = h.pop(); if (h.length) { h[0] = e; down(0); } return t; } };
+  }
+  // robust: scale to a high percentile so one huge cell doesn't hide the rest
+  function heatImage(grid, cols, rows, p, heatRGB, percentile) {
+    const nz = [];
+    for (let i = 0; i < grid.length; i++) if (grid[i] > 0) nz.push(grid[i]);
+    const cv = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(Math.max(1, cols), Math.max(1, rows)) : Object.assign(document.createElement('canvas'), { width: Math.max(1, cols), height: Math.max(1, rows) });
+    if (!nz.length) return cv;
+    let top;
+    if (percentile) { nz.sort((x, y) => x - y); top = nz[Math.min(nz.length - 1, Math.floor(nz.length * 0.985))]; } else top = nz.reduce((m, v) => (v > m ? v : m), 0);
+    const g = 1.2 - 0.09 * p.contrast, img = new ImageData(Math.max(1, cols), Math.max(1, rows)), d = img.data;
+    for (let i = 0; i < grid.length; i++) {
+      if (!(grid[i] > 0)) continue;
+      const t = Math.pow(Math.min(1, grid[i] / top), g);
+      if (t < 0.02) continue;
+      const [r, gg, b] = heatRGB(p.palette, t);
+      d[i * 4] = r; d[i * 4 + 1] = gg; d[i * 4 + 2] = b; d[i * 4 + 3] = Math.round(255 * Math.min(1, 0.2 + t));
+    }
+    cv.getContext('2d').putImageData(img, 0, 0);
+    return cv;
+  }
+  function drawHeat(api, img, a0, b0, h) {
+    const x0 = api.xAt(a0) - api.spacing / 2, x1 = api.xAt(b0) + api.spacing / 2;
+    api.ctx.save();
+    api.ctx.imageSmoothingEnabled = false;
+    api.ctx.drawImage(img, x0, api.top, x1 - x0, h);
+    api.ctx.restore();
+  }
   // (UPDN: the up/down histogram colors defined above)
   const DERIVS = [
     {
@@ -1351,6 +1387,116 @@
       plots: [{ key: 'r', name: 'Long/short', color: '#9C6ADE' }],
       levels: [1],
       calc(bars, p, ext) { return { r: mapExt(bars, ext, (x) => x.v), $label: ext.source }; },
+    },
+    {
+      id: 'liqheat', name: 'Liquidation Heatmap (estimated)', short: 'Liq heatmap', overlay: true, ext: 'oi', underlay: true,
+      desc: 'Where leveraged positions would be liquidated, estimated from open interest: each rise in open interest is spread over typical leverage above and below its price, and removed once the price trades through it. Brighter: more positions would be closed there.',
+      inputs: [
+        { key: 'lev', label: 'Leverage mix', type: 'select', options: ['Mixed (5–100×)', 'High (25–100×)', 'Low (3–25×)'], def: 'Mixed (5–100×)' },
+        { key: 'side', label: 'Longs vs shorts', type: 'select', options: ['From buying and selling', 'Half and half'], def: 'From buying and selling' },
+        HEAT_PALETTE, HEAT_CONTRAST, HEAT_CELL,
+        { key: 'map', label: 'Levels now (right edge)', type: 'select', options: ['Show', 'Hide'], def: 'Show' },
+      ],
+      plots: [],
+      colors: [{ key: 'long', name: 'Long liquidations (now)', color: 'rgba(247,82,95,0.55)' }, { key: 'short', name: 'Short liquidations (now)', color: 'rgba(34,171,148,0.55)' }],
+      calc(bars, p, ext) {
+        const n = bars.length, oi = mapExt(bars, ext, (r, b) => (r.v > 0 ? r.v : r.coin * b.c));
+        const TIERS = { 'High (25–100×)': [[25, 0.35], [50, 0.35], [100, 0.3]], 'Low (3–25×)': [[3, 0.2], [5, 0.3], [10, 0.3], [25, 0.2]] }[p.lev] || [[5, 0.1], [10, 0.25], [25, 0.3], [50, 0.2], [100, 0.15]];
+        // G: how much of the positions opened earlier are still open (falling open interest closes some of everyone's)
+        const G = new Float64Array(n).fill(1), levels = [];
+        const longs = heap((x, y) => x.px > y.px), shorts = heap((x, y) => x.px < y.px); // next to be hit first
+        for (let i = 1; i < n; i++) {
+          const b = bars[i], o0 = oi[i - 1], o1 = oi[i];
+          G[i] = G[i - 1];
+          // the price reached these: liquidated
+          while (longs.size() && longs.peek().px >= b.l) longs.pop().end = i;
+          while (shorts.size() && shorts.peek().px <= b.h) shorts.pop().end = i;
+          if (!(o0 > 0 && o1 > 0)) continue;
+          if (o1 < o0) { G[i] = G[i - 1] * (o1 / o0); continue; }
+          const d = o1 - o0, entry = (b.h + b.l + b.c) / 3;
+          let ls = 0.5;
+          if (p.side !== 'Half and half') ls = b.bv >= 0 && b.v > 0 ? 0.25 + 0.5 * (b.bv / b.v) : b.c >= b.o ? 0.6 : 0.4;
+          for (const [lev, w] of TIERS) {
+            const L = { px: entry * (1 - 1 / lev + 0.004), usd: d * ls * w, start: i, end: n, long: true }, S = { px: entry * (1 + 1 / lev - 0.004), usd: d * (1 - ls) * w, start: i, end: n, long: false };
+            levels.push(L, S); longs.push(L); shorts.push(S);
+          }
+        }
+        return { $heat: { levels, G }, $label: `${ext.source} open interest, est.` };
+      },
+      paint(api) {
+        const H = api.out.$heat;
+        if (!H || !H.levels.length) return;
+        const { ctx, a, b, top, height, params: p } = api, n = api.bars.length, cell = Math.max(1, p.cell), rows = Math.ceil(height / cell);
+        const a0 = Math.max(0, a), b0 = Math.min(n - 1, b), cols = b0 - a0 + 1;
+        if (cols < 1) return;
+        const key = [a0, b0, top, height, api.vOf(top), api.vOf(top + height), p.palette, p.contrast, cell].join('|');
+        if (!H.cache || H.cache.key !== key) {
+          const grid = new Float32Array(rows * cols);
+          for (const L of H.levels) {
+            if (L.end < a0 || L.start >= b0) continue;
+            const r = Math.floor((api.yOf(L.px) - top) / cell);
+            if (r < 0 || r >= rows) continue;
+            const g0 = H.G[L.start];
+            for (let j = Math.max(a0, L.start + 1); j <= Math.min(b0, L.end); j++) grid[r * cols + (j - a0)] += (L.usd * H.G[j]) / g0;
+          }
+          H.cache = { key, img: heatImage(grid, cols, rows, p, api.heatRGB) };
+        }
+        drawHeat(api, H.cache.img, a0, b0, rows * cell);
+        // levels still open now, as bars at the right edge (a liquidation map)
+        if (p.map === 'Show') {
+          const now = new Map();
+          for (const L of H.levels) {
+            if (L.end !== n) continue;
+            const r = Math.floor((api.yOf(L.px) - top) / cell);
+            if (r < 0 || r >= rows) continue;
+            const k = r * 2 + (L.long ? 0 : 1);
+            now.set(k, (now.get(k) || 0) + L.usd * (H.G[n - 1] / H.G[L.start]));
+          }
+          let mx = 0;
+          for (const v of now.values()) mx = Math.max(mx, v);
+          const W = Math.min(110, api.right * 0.12);
+          for (const [k, v] of now) {
+            ctx.fillStyle = api.color(k % 2 ? 'short' : 'long');
+            const w = Math.max(1, (v / mx) * W);
+            ctx.fillRect(api.right - w, top + (k >> 1) * cell, w, Math.max(1, cell - (cell > 2 ? 0.5 : 0)));
+          }
+        }
+      },
+    },
+    {
+      id: 'bookheat', name: 'Liquidity Heatmap (order book)', short: 'Book heatmap', overlay: true, underlay: true, live: 'book',
+      desc: 'Resting limit orders at each price over time, recorded from the live order book while the chart is open (Binance, Bybit and Hyperliquid markets). Bright bands are large orders waiting; watch whether the price is pulled to them, bounces or eats through.',
+      inputs: [HEAT_PALETTE, HEAT_CONTRAST, HEAT_CELL],
+      plots: [],
+      calc: () => ({ $label: 'recorded live' }),
+      paint(api) {
+        const R = api.chart.bookHeat;
+        if (!R || !R.snaps.length) return;
+        const { top, height, params: p } = api, cell = Math.max(1, p.cell), rows = Math.ceil(height / cell), colPx = 2, cols = Math.ceil(api.right / colPx);
+        const key = [R.version, top, height, api.vOf(top), api.vOf(top + height), api.xOfTime(R.snaps[0].t), api.spacing, p.palette, p.contrast, cell].join('|');
+        if (!R.cache || R.cache.key !== key) {
+          const grid = new Float32Array(rows * cols), S = R.snaps;
+          for (let k = 0; k < S.length; k++) {
+            const x0 = api.xOfTime(S[k].t) - api.spacing / 2, x1 = (k + 1 < S.length ? api.xOfTime(S[k + 1].t) : api.xOfTime(Date.now())) - api.spacing / 2;
+            if (x1 < 0 || x0 > api.right) continue;
+            const c0 = Math.max(0, Math.floor(x0 / colPx)), c1 = Math.min(cols - 1, Math.max(c0, Math.ceil(x1 / colPx) - 1));
+            for (const side of [S[k].bids, S[k].asks]) {
+              for (let m = 0; m < side.length; m += 2) {
+                const r = Math.floor((api.yOf(side[m]) - top) / cell);
+                if (r < 0 || r >= rows) continue;
+                const v = side[m] * side[m + 1];
+                for (let c = c0; c <= c1; c++) { const q = r * cols + c; if (v > grid[q]) grid[q] = v; }
+              }
+            }
+          }
+          R.cache = { key, img: heatImage(grid, cols, rows, p, api.heatRGB, true) };
+        }
+        const { ctx } = api;
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(R.cache.img, 0, top, cols * colPx, rows * cell);
+        ctx.restore();
+      },
     },
   ];
   for (const d of DERIVS) DEFS.push(d);

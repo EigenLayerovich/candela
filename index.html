@@ -39,6 +39,8 @@
         <option value="pnf">Point &amp; Figure</option>
         <option value="linebreak">Line break</option>
         <option value="range">Range bars</option>
+            <option value="tpo">TPO (market profile)</option>
+            <option value="footprint">Footprint</option>
       </optgroup>
     </select>
     <button id="brickBtn" class="hbtn small" title="Box size and reversal" hidden>Box…</button>
@@ -67,7 +69,7 @@
     <button id="bookBtn" class="hbtn" title="Order book and trades" hidden>
       <svg viewBox="0 0 24 24"><path d="M4 6h9M4 10h6M4 14h11M4 18h7"/><path d="M18 5v14"/></svg><span>Book</span>
     </button>
-    <button id="marketBtn" class="hbtn" title="Market: funding rates across exchanges, RSI heatmap, Fear &amp; Greed">
+    <button id="marketBtn" class="hbtn" title="Market: screener, market matrix, funding rates across exchanges, RSI heatmap, Fear &amp; Greed">
       <svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><path d="M14 20l2.5-3 2 1.5 2-3.5"/></svg><span>Market</span>
     </button>
     <div class="spacer"></div>
@@ -135,6 +137,8 @@
   <script src="js/exchanges.js"></script>
   <script src="js/ibkr.js"></script>
   <script src="js/derivs.js"></script>
+  <script src="js/screener.js"></script>
+  <script src="js/flowrec.js"></script>
   <script src="js/drawings.js"></script>
   <script src="js/chart.js"></script>
   <script src="js/script.js"></script>

@@ -1,4 +1,12 @@
-## New in 1.27.1
+## New in 1.28.0
+
+- **Liquidation Heatmap** (estimated from open interest) and **Liquidity Heatmap** (the order book, recorded live) indicators, with color palettes.
+- **Footprint** chart type: buy and sell volume at every price of each candle, imbalances, delta. Binance loads recent trades; Bybit and Hyperliquid fill in live.
+- **TPO** chart type (market profile) with point of control, value area and initial balance.
+- **Screener** (Market window): every perpetual on Binance Futures, Bybit, OKX or Hyperliquid with 15 metrics, an open-interest signal and 21 presets; and a **Market matrix** of the busiest markets.
+- **Gray** theme, and a *Red up, green down* option in Chart settings.
+
+## In 1.27.1
 
 - Fixes Interactive Brokers in the Windows app ("The Interactive Brokers module is missing"): a part of the IBKR library was left out of 1.27.0.
 - Corrected setup steps: IB Gateway has no "Enable ActiveX and Socket Clients" setting (its API is always on); only TWS does.

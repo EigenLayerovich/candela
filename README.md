@@ -402,7 +402,7 @@ username for the same account avoids that. TWS works instead of IB Gateway too (
 - **Watchlist** with live prices and 24h change.
 - **CSV import** for anything else: Date, Open, High, Low, Close, Volume (Yahoo Finance-style exports
   work).
-- Themes: Dark, Ocean (dark blue), Slate (dark grey), Light and Paper (warm light), in Chart settings; the moon button switches between your light and dark one. PNG snapshot of the whole layout, everything persisted in your browser.
+- Themes: Dark, Ocean (dark blue), Slate (dark grey), Gray (medium), Light and Paper (warm beige), in Chart settings, where *Red up, green down* swaps the colors everywhere; the moon button switches between your light and dark one. PNG snapshot of the whole layout, everything persisted in your browser.
 - Offline fallback: if Binance is unreachable it switches to a simulated demo feed.
 
 ## Custom timeframes
@@ -472,6 +472,45 @@ the top 20 levels instead.
     on a 0–100 scale with the overbought and oversold zones. Click a coin to open it.
   - *Fear & Greed*: the Crypto Fear & Greed Index (alternative.me) today, compared with yesterday, last
     week, last month and a year ago, with its history.
+  - *Screener*: every perpetual on Binance Futures, Bybit, OKX or Hyperliquid with price, 1h / 4h / 24h
+    change, 24h volume, relative volume (the last hour against the average hour of the day before), open
+    interest and its 1h and 24h change, funding (per 8 hours), RSI 1h, the share of taker buying (Binance)
+    and the 24h range. The **OI signal** reads price and open interest over the hour together: both up,
+    longs opening; price down and OI up, shorts opening; price up and OI down, shorts covering; both down,
+    longs closing. 21 presets (top gainers and losers, volume spikes, OI surges and drops, negative or high
+    funding, the four OI signals, stacked buying or selling, overbought and oversold, near the 24h high or
+    low, most volatile, largest open interest), a filter, and any column to sort by. Hourly numbers are
+    for the busiest 50, 100 or 200 markets. Hyperliquid publishes no open-interest history, so Candela
+    keeps its own samples while the screener is open: its OI change appears after an hour.
+  - *Market matrix*: the busiest 24 to 100 markets as tiles sized by 24h volume and colored by 1h change,
+    24h change, open interest change or funding. Click a tile to open it.
+
+## Heatmaps, footprint and TPO
+
+- **Liquidation Heatmap (estimated)** (indicator, Derivatives): where leveraged positions would be
+  liquidated. Each rise in open interest (Binance, OKX or Bybit; the chart's own exchange for futures) is
+  taken as new positions at that candle's price, split between longs and shorts by the candle's buying
+  and selling, and spread over typical leverage (5× to 100×, or a high or low mix). Their liquidation
+  prices form bands that stay until the price trades through them; falling open interest fades them all.
+  The bars at the right edge are the levels still open now. It is a model, not the exchanges' real
+  positions (nobody publishes those), so read it as where liquidations are likely to cluster.
+- **Liquidity Heatmap (order book)** (indicator, Derivatives): the resting limit orders at each price over
+  time, recorded from the live order book every 2 seconds while the chart is open (Binance, Binance
+  Futures, Bybit and Hyperliquid markets), for up to 3 hours. It starts empty and builds up; switching to
+  another chart and back keeps what was recorded for 30 minutes. Bright bands are large orders.
+- Both heatmaps have color palettes (Thermal, Ice, Gold, Viridis, Ember, Mono), brightness and row height.
+- **Footprint** (chart type): each candle split into price rows, with the volume sold by aggressive sellers
+  on the left and bought by aggressive buyers on the right, shaded by size. Bold numbers are imbalances
+  (three times the other side one row away), the busiest row is outlined, and the candle's delta (buys
+  minus sells) and volume are below it. On Binance and Binance Futures the last 30,000–60,000 trades are
+  loaded, so recent candles have footprints at once; on Bybit and Hyperliquid, which only publish their
+  latest trades, footprints fill in from when the chart is opened. Older candles show as plain candles.
+  Zoom in for the numbers; *Rows…* sets the row size (automatic follows the zoom).
+- **TPO** (chart type, market profile): each session (a day for candles up to 1 hour, a week for 2–4 hours,
+  a month for daily candles) as a profile. Every candle is a letter (A, B, C…) at each price row it traded,
+  stacked from the session's start; the widest row is the point of control (orange), the brighter rows the
+  value area (70% of the letters, adjustable), the blue bar the initial balance (the first two candles),
+  and arrows mark the open and the close. A 30-minute chart gives the classic profile.
 
 ## Indicators on another timeframe
 
@@ -770,6 +809,8 @@ It shows up in the Indicators dialog automatically, with a settings panel genera
 - `js/backtest.js`: the Strategy Tester's backtest engine
 - `js/paper.js`: paper trading: accounts, orders, fills, P&L
 - `js/derivs.js`: open interest, funding and long/short history, liquidations, funding across exchanges
+- `js/screener.js`: the screener and market matrix data; `js/flowrec.js`: trades and order books recorded for
+  footprints and the liquidity heatmap
 - `js/data.js`: Binance REST/WebSocket, Twelve Data, demo feed, CSV parser
 - `js/exchanges.js`: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex, Binance and
   Bybit futures, and building missing timeframes

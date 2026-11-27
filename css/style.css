@@ -22,6 +22,10 @@
   --bg: #17181B; --panel: #1C1D21; --panel-2: #23252A; --border: #2C2E34; --text: #DADBDF; --muted: #8A8D96;
   --accent: #8AA4FF; --accent-soft: rgba(138, 164, 255, 0.15);
 }
+:root[data-theme="gray"] {
+  --bg: #26282D; --panel: #2C2F35; --panel-2: #34373E; --border: #3A3D44; --text: #E4E5E9; --muted: #A2A6AF;
+  --accent: #7FA7FF; --accent-soft: rgba(127, 167, 255, 0.16); --up: #3DBE95; --down: #F06470;
+}
 :root[data-theme="paper"] {
   --bg: #FBF7EF; --panel: #F4EEE2; --panel-2: #ECE4D4; --border: #DDD3C0; --text: #2B2620; --muted: #776D5F;
   --accent: #B5651D; --accent-soft: rgba(181, 101, 29, 0.12); --up: #2E8B57; --down: #C2413A;
@@ -814,12 +818,23 @@ kbd { display: inline-block; font: 600 11px/1 inherit; padding: 3px 6px; border:
 .wl-title:hover { color: var(--accent); }
 
 /* ---- Market window */
+.modal.mk-modal { width: min(1200px, 100%); }
 .mk-modal .modal-body { min-height: 300px; }
 .mk-body { padding-top: 10px; }
 .mk-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12.5px; }
 .mk-bar select { height: 28px; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; }
 .mk-views { display: inline-flex; gap: 2px; }
 .mk-scroll { max-height: 56vh; }
+.scr-find { width: 150px !important; height: 28px; padding: 0 8px !important; font-size: 12.5px !important; margin: 0 !important; }
+.scr-table th.scr-th { cursor: pointer; user-select: none; white-space: nowrap; }
+.scr-table th.scr-th.on { color: var(--accent); }
+.scr-table td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.scr-table .scr-hot { color: var(--warn, #F5A623); font-weight: 600; }
+.mx-area { position: relative; width: 100%; overflow: hidden; border-radius: 6px; }
+.mx-tile { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 0; border-radius: 3px; padding: 0; color: #fff; cursor: pointer; overflow: hidden; font: inherit; font-size: 11px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45); }
+.mx-tile:hover { outline: 2px solid var(--accent); z-index: 1; }
+.mx-tile b { font-weight: 700; line-height: 1.1; }
+.mx-tile span { font-size: 11px; opacity: 0.95; }
 .mk-table td, .mk-table th { text-align: right; }
 .mk-table td:first-child, .mk-table th:first-child { text-align: left; }
 .mk-table tbody tr { cursor: pointer; }

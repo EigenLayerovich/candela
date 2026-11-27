@@ -292,9 +292,9 @@ password, and has no way to place orders (tick *Read-Only API* to be sure).
 
 1. Install **IB Gateway** (the "stable" version) from interactivebrokers.com. Start it and log in with
    *IB API* and *Live Trading* selected.
-2. In IB Gateway: *Configure → Settings → API → Settings*: tick **Enable ActiveX and Socket Clients**
-   and **Read-Only API**; the socket port is **4001** (paper trading: 4002). Leave *Allow connections
-   from localhost only* ticked.
+2. In IB Gateway: *Configure → Settings → API → Settings*: tick **Read-Only API**; the socket port is
+   **4001** (paper trading: 4002). Leave *Allow connections from localhost only* ticked (further down
+   the same page). IB Gateway's API is always on; in TWS also tick *Enable ActiveX and Socket Clients*.
 3. *Configure → Settings → Lock and Exit*: choose **Auto restart**, so it survives IBKR's daily restart
    (you log in again once a week).
 4. In Candela: *Symbol search → Interactive Brokers…* (or *Alert server → Interactive Brokers*): tick

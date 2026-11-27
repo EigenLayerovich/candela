@@ -2094,7 +2094,7 @@
       h('details', { class: 'td-limits', open: '' }, h('summary', {}, 'Set up IB Gateway (once)'),
         h('ol', { class: 'ib-steps' },
           h('li', {}, 'Install IB Gateway (“stable” version) from interactivebrokers.com, start it and log in with ', h('b', {}, 'IB API'), ' and ', h('b', {}, 'Live Trading'), ' selected.'),
-          h('li', {}, 'In IB Gateway: Configure → Settings → API → Settings. Tick ', h('b', {}, 'Enable ActiveX and Socket Clients'), ' and ', h('b', {}, 'Read-Only API'), '. Socket port 4001.'),
+          h('li', {}, 'In IB Gateway: Configure → Settings → API → Settings. Tick ', h('b', {}, 'Read-Only API'), ' and check the socket port is 4001. (IB Gateway’s API is always on. In TWS, also tick ', h('b', {}, 'Enable ActiveX and Socket Clients'), '.)'),
           h('li', {}, 'Keep ', h('b', {}, 'Allow connections from localhost only'), ' ticked (or add 127.0.0.1 to Trusted IPs), so you aren’t asked to accept each connection.'),
           h('li', {}, 'Configure → Settings → Lock and Exit: choose ', h('b', {}, 'Auto restart'), ', so it keeps running after IBKR’s daily restart without logging in again (you log in again once a week).'),
           h('li', {}, 'Tick “Use Interactive Brokers” here and save. Then search for a symbol under the Interactive Brokers tab.'))),

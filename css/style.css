@@ -272,7 +272,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .form { display: flex; flex-direction: column; gap: 10px; padding-top: 8px; }
 .form label { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .form label > span:first-child { color: var(--muted); }
-.form input[type="number"], .form select { width: 150px; height: 32px; border: 1px solid var(--border); background: var(--bg); border-radius: 6px; padding: 0 8px; }
+.form input[type="number"], .form select, .ib-dialog input[type="text"] { width: 150px; height: 32px; border: 1px solid var(--border); background: var(--bg); border-radius: 6px; padding: 0 8px; }
 .form input[type="color"] { width: 44px; height: 30px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 2px; cursor: pointer; }
 .form p { margin: 4px 0 0; font-size: 12px; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
@@ -453,6 +453,15 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 /* ---- other exchanges */
 .sym-ex { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: var(--muted); margin-left: 6px; }
 .sym-ex:empty { display: none; }
+.ex-tag.ib { color: var(--accent); border-color: currentColor; }
+.ib-status { font-weight: 600; font-size: 13px; }
+.ib-status.ok { color: var(--up); }
+.ib-status.bad { color: var(--down); }
+.ib-status.wait { color: var(--warn, #e0a030); }
+.ib-port-hint { font-size: 11px; margin-top: -6px; }
+.ib-steps { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 5px; font-size: 12.5px; line-height: 1.45; }
+.ib-dialog label.check { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+.ib-dialog label.check input { width: auto !important; margin: 0; }
 .ex-tag { font-style: normal; font-size: 9px; font-weight: 700; letter-spacing: 0.04em; color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 3px; margin-left: 5px; vertical-align: 1px; }
 .src-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .chip { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }

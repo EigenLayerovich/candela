@@ -1,4 +1,8 @@
-## New in 1.26.0
+## New in 1.27.0
+
+- **Interactive Brokers**: chart stocks, ETFs, indices, futures, forex and metals from your IBKR account, live, through IB Gateway on your computer (read-only: Candela never places orders). Symbol search → Interactive Brokers… to set it up; IBKR results then come first under Stocks, Forex, Metals and Commodities. Watchlist, alerts (also on the alert server), comparisons and paper trading work with them too.
+
+## In 1.26.0
 
 - **Stock, forex, metal and commodity perpetuals** from more exchanges: OKX, Bitget, Gate.io and MEXC Futures join Binance Futures and Hyperliquid (with funding, mark price and open interest), plus tokenized stocks (xStocks, Ondo) on spot exchanges.
 - **New search categories**: Stocks, Forex, Metals (gold, silver, platinum, palladium, copper, aluminum…) and Commodities, gathering every exchange. Exchange chips now list crypto only.

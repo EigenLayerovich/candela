@@ -42,7 +42,7 @@ the installer (needs NSIS). Run it during development with `npm start`.
 
 ## Run it in a browser
 
-It's plain HTML/JS with zero dependencies and no build step. The easiest way is the included server
+It's plain HTML/JS with no build step. The easiest way is the included server
 (needs [Node.js](https://nodejs.org) 18 or newer), which also keeps your alerts running with the
 browser closed:
 
@@ -50,6 +50,9 @@ browser closed:
 cd candela
 node server.js
 ```
+
+For Interactive Brokers data, install the server's one library first (`npm install --omit=dev` in
+the Candela folder). Everything else works without it.
 
 Then open http://localhost:8000.
 
@@ -279,6 +282,39 @@ vs BTC), the watchlist, and alerts, including on the alert server.
 Timeframes for stocks: 1m, 5m, 15m, 30m, 1H, 2H, 4H, 1D, 1W (3m, 6H, 12H and 3D are crypto only).
 US listings work on the free plan; other exchanges may need a paid Twelve Data plan. The free plan
 is meant for personal use.
+
+### Interactive Brokers (your IBKR account, through IB Gateway)
+
+With an Interactive Brokers account, Candela can chart stocks, ETFs, indices, futures, forex and
+metals with IBKR's data, live. It works in the Windows app or with `node server.js`, on the computer
+where IB Gateway runs. Candela only reads prices: it connects to IB Gateway's API, never sees your
+password, and has no way to place orders (tick *Read-Only API* to be sure).
+
+1. Install **IB Gateway** (the "stable" version) from interactivebrokers.com. Start it and log in with
+   *IB API* and *Live Trading* selected.
+2. In IB Gateway: *Configure → Settings → API → Settings*: tick **Enable ActiveX and Socket Clients**
+   and **Read-Only API**; the socket port is **4001** (paper trading: 4002). Leave *Allow connections
+   from localhost only* ticked.
+3. *Configure → Settings → Lock and Exit*: choose **Auto restart**, so it survives IBKR's daily restart
+   (you log in again once a week).
+4. In Candela: *Symbol search → Interactive Brokers…* (or *Alert server → Interactive Brokers*): tick
+   *Use Interactive Brokers* and *Save & test*. Then search under the **Interactive Brokers** tab, or
+   under Stocks, Forex, Metals and Commodities, where IBKR results come first.
+
+Searching `ES`, `NQ`, `GC` or `CL` also offers the front-month future. Every timeframe from 1m to 1M
+works (others are built from those), with history to scroll back through, live updates, the
+watchlist, comparisons, paper trading and alerts (the alert server checks IBKR alerts too).
+
+**Market data.** Without subscriptions IBKR still gives free real-time US stock quotes (Cboe One and
+IEX), forex and metals; other markets show delayed data. Full US exchange data is the "US Securities
+Snapshot and Futures Value Bundle" in Client Portal (about $10 a month, waived with $30 of monthly
+commissions); futures need their exchange's subscription.
+
+**Limits.** IBKR allows about 60 history requests every 10 minutes and usually 100 live symbols at
+once (watchlist rows count); Candela queues and caches requests. You can only be logged in to IBKR in
+one place: logging in on your phone or in TWS with the same username logs IB Gateway out. A second
+username for the same account avoids that. TWS works instead of IB Gateway too (ports 7496 live,
+7497 paper).
 
 ## Features
 
@@ -738,6 +774,7 @@ It shows up in the Indicators dialog automatically, with a settings panel genera
 - `js/exchanges.js`: Bybit, OKX, Bitget, KuCoin, Gate.io, MEXC, HTX, Kraken, Coinbase, Bitfinex, Binance and
   Bybit futures, and building missing timeframes
 - `server.js`: the alert server (also serves the app)
+- `ibkr.js`: the server's connection to IB Gateway (Interactive Brokers); `js/ibkr.js` is the app's side
 - `desktop/`: the Windows app (Electron): `main.js` (window, tray, notifications), `preload.js`,
   `installer.nsi` (installer), icons
 - `js/app.js`: UI: chart layouts and sync, toolbar, dialogs, watchlist, alerts, persistence

@@ -21,9 +21,12 @@
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   // display name: AAPL, EUR/USD, BTCUSDT, NVDAB (a Binance bStock)
-  const bare = (sym) => MD.exDisplay(sym) || (MD.isBStock(sym) ? sym.replace(/USDT$/, '') : sym.replace(/^(CSV|TD):/, '').replace(/@.*$/, ''));
+  const isIB = (sym) => !!(MD.isIB && MD.isIB(sym)); // Interactive Brokers, through IB Gateway and Candela's server
+  const ibName = (sym) => { const c = MD.ibParse(sym); return c.secType === 'CASH' ? c.label.replace('.', '/') : c.label; };
+  const bare = (sym) => (isIB(sym) ? ibName(sym) : MD.exDisplay(sym) || (MD.isBStock(sym) ? sym.replace(/USDT$/, '') : sym.replace(/^(CSV|TD):/, '').replace(/@.*$/, '')));
   const isStock = (sym) => sym.startsWith('TD:');
-  const exOf = (sym) => MD.exchangeOf(sym); // Bybit, KuCoin, Kraken or Coinbase (null for Binance and the rest)
+  const IB_EX = { id: 'IB', name: 'IBKR', short: 'IBKR', tag: 'IB', futures: false };
+  const exOf = (sym) => (isIB(sym) ? IB_EX : MD.exchangeOf(sym)); // Bybit, KuCoin, Kraken, Coinbase, IBKR… (null for Binance and the rest)
   // bare name plus the exchange, for lists that mix exchanges: "BTC/USD · Kraken"
   const symLabel = (sym) => (exOf(sym) ? `${bare(sym)} · ${exOf(sym).name}` : bare(sym));
   // "$5.75B", "$812.4M"
@@ -564,6 +567,7 @@
       const meta = isStock(sym) && MD.stockMeta(sym);
       const src = isDemo(sym) ? ' · SIMULATED' : this.mode === 'demo' ? ' · DEMO DATA' : sym.startsWith('CSV:') ? ' · CSV'
         : isStock(sym) ? ' · ' + (MD.isForex(sym) ? 'FOREX' : (meta && meta.exchange) || 'STOCKS') : MD.isBStock(sym) ? ' · BINANCE bSTOCK'
+        : isIB(sym) ? ' · IBKR ' + MD.ibParse(sym).secType.replace('STK', 'STOCK').replace('CASH', 'FOREX').replace('FUT', 'FUTURE').replace('IND', 'INDEX').replace('CMDTY', 'COMMODITY')
         : exOf(sym) ? ' · ' + exOf(sym).name.toUpperCase() : ' · BINANCE';
       return bare(sym) + tfLabel + src;
     }
@@ -574,7 +578,7 @@
       if (!MD.ensureTf(tf)) tf = '1h';
       if (!MD.supportsTf(sym, tf)) {
         const near = MD.nearestTf(sym, tf);
-        toast(`${tfName(tf)} isn't available for stocks and forex, showing ${tfName(near)}.`, 'info', 3500);
+        toast(`${tfName(tf)} isn't available for ${isIB(sym) ? 'IBKR symbols' : 'stocks and forex'}, showing ${tfName(near)}.`, 'info', 3500);
         tf = near;
       }
       if (this.stop) this.stop();
@@ -617,7 +621,7 @@
         } catch (e) {
           if (gen !== this.gen) return;
           c.title = this.title();
-          c.message = e.fatal ? e.message : `${bare(sym)}: could not reach ${ex.name}. Check your connection.`;
+          c.message = ex === IB_EX ? `${bare(sym)}: ${e.message}` : e.fatal ? e.message : `${bare(sym)}: could not reach ${ex.name}. Check your connection.`;
           this.setStatus('error');
           c.setData([], MD.TF[tf]);
           c.invalidate();
@@ -657,7 +661,7 @@
       if (gen !== this.gen) return;
       c.title = this.title();
       c.watermark = `${bare(sym)}, ${sym.startsWith('CSV:') ? 'CSV' : tfName(tf)}`;
-      c.countdown = !isStock(sym) && !/M$/.test(tf); // stock bars don't close on the clock (sessions, closed markets)
+      c.countdown = !isStock(sym) && !isIB(sym) && !/M$/.test(tf); // stock bars don't close on the clock (sessions, closed markets)
       c.setData(bars, interval, { resetView: true });
       this.syncExt();
       refreshTradeLines();
@@ -1261,7 +1265,7 @@
       needskey: 'Stocks and forex need a free Twelve Data API key. Click to add it.',
     };
     el.dataset.state = s;
-    el.title = tips[s] || 'Data connection';
+    el.title = tips[s] || (typeof active.statusDetail === 'string' && active.statusDetail) || 'Data connection';
     el.classList.toggle('clickable', s === 'needskey' || s === 'limit' || s === 'polling');
     $('span', el).textContent = labels[s] || s;
   }
@@ -1833,14 +1837,15 @@
     const list = h('div', { class: 'list' });
     // where to search: everything, one crypto exchange (crypto only), or a kind of market on every source
     const CATS = { STOCKS: 'stock', FOREX: 'forex', METALS: 'metal', COMMOD: 'commodity' };
-    const SOURCES = [['ALL', 'All'], ['STOCKS', 'Stocks'], ['FOREX', 'Forex'], ['METALS', 'Metals'], ['COMMOD', 'Commodities'], ['BINANCE', 'Binance'], ...Object.values(MD.EXCHANGES).map((ex) => [ex.id, ex.name])];
+    const ibServed = !PREVIEW && MD.ibkr && MD.ibkr.served();
+    const SOURCES = [['ALL', 'All'], ['STOCKS', 'Stocks'], ['FOREX', 'Forex'], ['METALS', 'Metals'], ['COMMOD', 'Commodities'], ...(ibServed ? [['IB', 'Interactive Brokers']] : []), ['BINANCE', 'Binance'], ...Object.values(MD.EXCHANGES).map((ex) => [ex.id, ex.name])];
     let src = SOURCES.some(([k]) => k === state.searchSrc) && !PREVIEW ? state.searchSrc : 'ALL';
     const chips = h('div', { class: 'src-chips', role: 'tablist' }, SOURCES.map(([k, label]) => h('button', {
       class: 'chip' + (k === src ? ' on' : ''), 'data-src': k, role: 'tab', disabled: PREVIEW && k !== 'ALL' ? '' : null,
       onclick: () => {
         src = k; state.searchSrc = k; save(); sel = 0;
         chips.querySelectorAll('.chip').forEach((b) => b.classList.toggle('on', b.dataset.src === k));
-        loadEx(); render(); input.focus();
+        loadEx(); render(); queueIbSearch(); input.focus();
       },
     }, label)));
     // symbol lists of the other exchanges, loaded when needed
@@ -1856,11 +1861,14 @@
     };
     const csvBtn = h('button', { class: 'btn', onclick: () => { csvTarget = opts.csv || 'main'; $('#csvInput').click(); } }, 'Import CSV…');
     const keyBtn = h('button', { class: 'btn', onclick: () => openStockSettings() }, state.stocks.key ? 'Stock data…' : 'Add stock data key…');
+    const ibBtn = ibServed ? h('button', { class: 'btn', onclick: () => { close(); openIbkrSettings(() => openSymbolSearch(input.value, opts)); } }, 'Interactive Brokers…') : null;
     const hint = h('span', { class: 'muted' }, PREVIEW ? 'Preview: simulated data only. Download the app for live crypto, stocks and forex.' : state.stocks.key ? 'Stock, forex and metal perpetuals from the crypto exchanges; exchange stock data from Twelve Data.' : 'Stock, forex and metal perpetuals are free. A free Twelve Data key adds real exchange stock and forex data.');
     if (PREVIEW) keyBtn.hidden = true;
     const title = opts.title || (slots.length > 1 && !state.sync.symbol ? `Symbol search · chart ${slots.indexOf(active) + 1}` : 'Symbol search');
-    const { close } = openModal(title, h('div', {}, input, chips, list), { footer: [hint, keyBtn, csvBtn] });
+    const { close } = openModal(title, h('div', {}, input, chips, list), { footer: [hint, keyBtn, ibBtn, csvBtn].filter(Boolean) });
     let symbols = [], stockHits = [], stockQ = null, stockTimer = null, sel = 0, items = [];
+    // Interactive Brokers: searched on IBKR's servers through IB Gateway
+    let ibHits = [], ibQ = null, ibErr = '', ibTimer = null;
     const exclude = (id) => opts.exclude && opts.exclude.includes(id);
     const render = () => {
       const raw = input.value.trim(), q = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -1897,7 +1905,7 @@
       // "AAPL" or "COIN" mean the stock
       const isCoin = cryptoRows.some((x) => x.id === q || x.id === q + 'USDT' || x.id === q + 'USDC');
       const exactB = bRows.some((x) => MD.bStockTicker(x.id) === q);
-      const stocksFirst = !isCoin && (exactB || (stockRows.length && (stockRows.some((x) => x.r.symbol === up) || !cryptoRows.some((x) => x.id.startsWith(q)))));
+      let stocksFirst = !isCoin && (exactB || (stockRows.length && (stockRows.some((x) => x.r.symbol === up) || !cryptoRows.some((x) => x.id.startsWith(q)))));
       const bGroup = ['Stocks · Binance bStocks (free, live)', bRows];
       const tdOf = (cls) => stockRows.filter((x) => MD.assetClass(x.id) === cls);
       const tdGroup = ['Stocks & ETFs · Twelve Data', tdOf('stock')];
@@ -1926,14 +1934,19 @@
         if (!raw && POP_TD[cls]) rows = POP_TD[cls].map((x) => ({ id: 'TD:' + x, kind: 'stock', r: { id: 'TD:' + x, symbol: x, name: null, exchange: 'Forex', type: cls === 'metal' ? 'Metal' : 'Forex', us: true } }));
         return [label, rows.filter((x) => !exclude(x.id))];
       };
+      // IBKR results of one kind (stock, forex, metal, commodity): first when connected, it is real exchange data
+      const ibOn = ibServed && ibk.enabled;
+      const ibRowsAll = ibOn && raw && ibQ === raw ? ibHits.filter((r) => !exclude(r.id)).map((r) => ({ id: r.id, kind: 'ib', r })) : [];
+      const ibCat = (cls, label) => (ibOn ? [[`${label} · Interactive Brokers`, ibRowsAll.filter((x) => MD.assetClass(x.id) === cls)]] : []);
       const catGroups = {
-        stock: () => [...(state.stocks.key ? [tdGroup, bGroup] : [bGroup, tdGroup]), perpGroup('stock', 'Stocks · perpetuals and tokenized stocks on crypto exchanges')],
-        forex: () => [perpGroup('forex', 'Forex · perpetuals on crypto exchanges'), tdCat('forex', 'Forex · Twelve Data')],
-        metal: () => [perpGroup('metal', 'Metals · perpetuals and gold tokens'), tdCat('metal', 'Metals · Twelve Data')],
-        commodity: () => [perpGroup('commodity', 'Commodities · perpetuals on crypto exchanges'), tdCat('commodity', 'Commodities · Twelve Data')],
+        stock: () => [...ibCat('stock', 'Stocks, ETFs & index futures'), ...(state.stocks.key ? [tdGroup, bGroup] : [bGroup, tdGroup]), perpGroup('stock', 'Stocks · perpetuals and tokenized stocks on crypto exchanges')],
+        forex: () => [...ibCat('forex', 'Forex'), perpGroup('forex', 'Forex · perpetuals on crypto exchanges'), tdCat('forex', 'Forex · Twelve Data')],
+        metal: () => [...ibCat('metal', 'Metals'), perpGroup('metal', 'Metals · perpetuals and gold tokens'), tdCat('metal', 'Metals · Twelve Data')],
+        commodity: () => [...ibCat('commodity', 'Commodities'), perpGroup('commodity', 'Commodities · perpetuals on crypto exchanges'), tdCat('commodity', 'Commodities · Twelve Data')],
       };
       // with a Twelve Data key the real exchange data comes first; without one, the free bStocks do
       const stockGroups = catGroups.stock();
+      if (src === 'ALL' && ibOn) { const g = stockGroups[0]; g[1] = ibRowsAll.filter((x) => MD.assetClass(x.id) === 'stock' || MD.assetClass(x.id) === 'crypto'); }
       // Bybit, KuCoin, Kraken, Coinbase
       const exGroups = [];
       for (const ex of Object.values(MD.EXCHANGES)) {
@@ -1948,11 +1961,17 @@
       const binGroup = ['Crypto · Binance', cryptoRows];
       let groups;
       if (src === 'BINANCE') groups = [binGroup]; // (bStocks are under Stocks)
+      else if (src === 'IB') {
+        const note = !ibk.enabled ? 'ibsetup' : !raw ? 'Type a ticker or a company name: AAPL, Tesla, ES (futures), EUR (forex), XAUUSD…'
+          : ibQ !== raw ? 'Searching Interactive Brokers…' : ibErr || (ibRowsAll.length ? null : `Nothing found on Interactive Brokers for "${raw}".`);
+        groups = [['Interactive Brokers' + (ibk.accounts ? ` · ${ibk.connected ? 'connected' : 'not connected'}` : ''), ibRowsAll, note]];
+      }
       else if (CATS[src]) groups = catGroups[CATS[src]]();
       else if (src !== 'ALL') groups = exGroups;
       else {
         // "All": crypto, then (once you type) the other kinds of market
         const more = q ? [...catGroups.metal(), ...catGroups.forex(), ...catGroups.commodity()].map((g) => [g[0], g[1]]) : [];
+        if (ibOn && ibRowsAll.some((x) => x.r.symbol === raw.toUpperCase() && MD.assetClass(x.id) === 'stock')) stocksFirst = true; // AAPL on IBKR
         // an exact name (XAU, GOLD, EURUSD, CL) puts its kind of market first
         const exact = more.filter((g) => g[1].some((r) => r.p && (r.p.base.replace(/^[A-Z]+\./, '') === q || r.p.alt === q || (r.p.label || '').toUpperCase() === raw.toUpperCase())));
         const rest = more.filter((g) => !exact.includes(g));
@@ -1964,7 +1983,9 @@
       for (const [label, rows, note] of groups) {
         if (!rows.length && !note) continue;
         list.appendChild(h('div', { class: 'list-group' }, label));
-        if (note) list.appendChild(h('div', { class: 'muted list-empty' }, note));
+        if (note === 'ibsetup') list.appendChild(h('div', { class: 'muted list-empty' }, 'Chart stocks, ETFs, futures, forex and metals from your Interactive Brokers account, through IB Gateway on this computer. ',
+          h('button', { class: 'btn small-btn', onclick: () => { close(); openIbkrSettings(() => openSymbolSearch(input.value, opts)); } }, 'Set up Interactive Brokers…')));
+        else if (note) list.appendChild(h('div', { class: 'muted list-empty' }, note));
         for (const row of rows) {
           const i = items.length;
           items.push(row);
@@ -1974,7 +1995,10 @@
             const kind = { stock: 'Stock', forex: 'Forex', metal: 'Metal', commodity: 'Commodity' }[row.p.cls];
             detail = `${row.p.label ? row.p.label + ' · ' : ''}${row.ex.futures ? `${kind} perpetual` : row.p.cls === 'stock' ? 'Tokenized stock' : `${kind} token`} · ${row.ex.name.replace(/ Futures$/, '')}`;
           } else if (row.kind === 'ex') detail = row.ex.futures ? `Perpetual future · ${row.ex.name}` : `Crypto · ${row.ex.name}`;
-          else if (row.kind === 'bstock') {
+          else if (row.kind === 'ib') {
+            const r = row.r, KIND = { STK: 'Stock', IND: 'Index', CASH: 'Forex', CMDTY: 'Commodity', FUT: 'Future', CRYPTO: 'Crypto' };
+            detail = [r.name, KIND[r.secType] || r.secType, r.exchange, r.currency].filter(Boolean).join(' · ');
+          } else if (row.kind === 'bstock') {
             const t = MD.bStockTicker(row.id), named = stockHits.find((r) => r.us && r.symbol.replace(/[^A-Z0-9]/g, '') === t);
             detail = `${named ? named.name : 'Tokenized ' + t} · bStock · free, live`;
           } else {
@@ -1983,7 +2007,7 @@
             if (!r.us) detail += ' · may need a paid plan';
           }
           list.appendChild(h('div', { class: 'list-row' + (i === sel ? ' sel' : ''), onclick: () => pick(row.id) },
-            h('b', {}, bare(row.id), row.kind === 'ex' ? h('i', { class: 'ex-tag' }, row.ex.tag) : null), h('span', { class: 'muted' }, detail,
+            h('b', {}, bare(row.id), row.kind === 'ex' ? h('i', { class: 'ex-tag' }, row.ex.tag) : row.kind === 'ib' ? h('i', { class: 'ex-tag ib' }, 'IB') : null), h('span', { class: 'muted' }, detail,
               row.kind === 'stock' && !state.stocks.key ? h('i', { class: 'needs-key' }, 'needs free key') : null)));
         }
       }
@@ -2006,7 +2030,21 @@
         } catch (e) { if (input.value.trim() === raw) { stockHits = []; stockQ = raw; render(); } }
       }, 250);
     };
-    input.addEventListener('input', () => { sel = 0; render(); queueStockSearch(); });
+    const queueIbSearch = () => {
+      clearTimeout(ibTimer);
+      const raw = input.value.trim();
+      if (!ibServed || !ibk.enabled || !raw) { ibQ = raw; return; }
+      if (src !== 'ALL' && src !== 'IB' && !CATS[src]) return;
+      if (ibQ === raw) return;
+      ibTimer = setTimeout(async () => {
+        let r = [], err = '';
+        try { r = await MD.ibkr.search(raw); } catch (e) { err = e.message; }
+        if (input.value.trim() === raw) { ibHits = r; ibErr = err; ibQ = raw; render(); }
+      }, 350); // IBKR allows about one search a second
+    };
+    input.addEventListener('input', () => { sel = 0; render(); queueStockSearch(); queueIbSearch(); });
+    // is Interactive Brokers turned on in the server? (asked each time the search opens)
+    if (ibServed) MD.ibkr.status().then((st) => { Object.assign(ibk, st); render(); queueIbSearch(); }, () => {});
     loadEx();
     input.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown') { sel = Math.min(items.length - 1, sel + 1); render(); e.preventDefault(); list.querySelector('.sel')?.scrollIntoView({ block: 'nearest' }); }
@@ -2018,6 +2056,95 @@
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
     try { symbols = await MD.allSymbols(); render(); } catch (e) { /* offline: only demo/csv + typed */ }
+  }
+
+  // ---- Interactive Brokers: IB Gateway on this computer, reached through Candela's server (read-only)
+  const ibk = { enabled: false, connected: false, accounts: '', status: 'off', message: '' };
+  function openIbkrSettings(after) {
+    const body = h('div', { class: 'form td-dialog ib-dialog' });
+    const footer = [];
+    let m, poll = null;
+    if (PREVIEW || !MD.ibkr || !MD.ibkr.served()) {
+      body.append(h('p', {}, 'Interactive Brokers works in the Candela Windows app, or when Candela is opened from its server (node server.js) on the computer where IB Gateway runs.'));
+      m = openModal('Interactive Brokers', body, { footer: [h('span', { class: 'spacer' }), h('button', { class: 'btn primary', onclick: () => m.close() }, 'OK')] });
+      return;
+    }
+    const statusLine = h('p', { class: 'ib-status', role: 'status' }, 'Checking…');
+    const showStatus = (st) => {
+      Object.assign(ibk, st);
+      const txt = !st.available ? 'The IBKR library is missing from the server. Run  npm install --omit=dev  in the Candela folder and restart the server.'
+        : !st.enabled ? 'Off' : st.connected ? `● Connected${st.accounts ? ' · account ' + st.accounts : ''}` : (st.message || 'Connecting…');
+      statusLine.className = 'ib-status ' + (st.connected ? 'ok' : st.enabled && st.status === 'error' ? 'bad' : st.enabled ? 'wait' : 'muted');
+      statusLine.textContent = txt;
+    };
+    const on = h('input', { type: 'checkbox', id: 'ibOn' });
+    const host = h('input', { type: 'text', id: 'ibHost', value: '127.0.0.1', spellcheck: 'false', autocomplete: 'off' });
+    const port = h('input', { type: 'number', id: 'ibPort', value: 4001, min: 1, max: 65535, step: 1 });
+    const cid = h('input', { type: 'number', id: 'ibCid', value: 77, min: 0, step: 1 });
+    const portHint = h('span', { class: 'muted ib-port-hint' }, 'IB Gateway: live 4001, paper 4002 · TWS: live 7496, paper 7497');
+    const result = h('p', { class: 'td-result', role: 'status' });
+    body.append(
+      h('p', {}, 'Chart stocks, ETFs, index futures, forex and metals with data from your Interactive Brokers account. Candela only reads prices: it never sees your password and can’t place orders.'),
+      statusLine,
+      h('label', { class: 'check', for: 'ibOn' }, on, h('span', {}, 'Use Interactive Brokers')),
+      h('label', { for: 'ibHost' }, h('span', {}, 'Host'), host),
+      h('label', { for: 'ibPort' }, h('span', {}, 'API port'), port),
+      portHint,
+      h('label', { for: 'ibCid' }, h('span', {}, 'Client ID'), cid),
+      h('details', { class: 'td-limits', open: '' }, h('summary', {}, 'Set up IB Gateway (once)'),
+        h('ol', { class: 'ib-steps' },
+          h('li', {}, 'Install IB Gateway (“stable” version) from interactivebrokers.com, start it and log in with ', h('b', {}, 'IB API'), ' and ', h('b', {}, 'Live Trading'), ' selected.'),
+          h('li', {}, 'In IB Gateway: Configure → Settings → API → Settings. Tick ', h('b', {}, 'Enable ActiveX and Socket Clients'), ' and ', h('b', {}, 'Read-Only API'), '. Socket port 4001.'),
+          h('li', {}, 'Keep ', h('b', {}, 'Allow connections from localhost only'), ' ticked (or add 127.0.0.1 to Trusted IPs), so you aren’t asked to accept each connection.'),
+          h('li', {}, 'Configure → Settings → Lock and Exit: choose ', h('b', {}, 'Auto restart'), ', so it keeps running after IBKR’s daily restart without logging in again (you log in again once a week).'),
+          h('li', {}, 'Tick “Use Interactive Brokers” here and save. Then search for a symbol under the Interactive Brokers tab.'))),
+      h('details', { class: 'td-limits' }, h('summary', {}, 'Market data and limits'),
+        h('p', { class: 'muted' }, 'Without market data subscriptions IBKR still gives free real-time US stock quotes from Cboe One and IEX, and free forex and metals. Delayed data (15 minutes) is shown where you have no subscription. For full US exchange data, subscribe to “US Securities Snapshot and Futures Value Bundle” in Client Portal (about $10 a month, waived with $30 in monthly commissions). Futures need their exchange’s subscription.'),
+        h('p', { class: 'muted' }, 'IBKR limits history requests (about 60 every 10 minutes) and live symbols (usually 100 at once, counting watchlist rows). Candela queues requests and caches candles, so scrolling far back in a 1-minute chart can take a moment.'),
+        h('p', { class: 'muted' }, 'You can be logged in to IBKR in one place at a time. Logging in on your phone or in TWS with the same user logs IB Gateway out (and the charts stop until you log it back in). A second IBKR username for the same account avoids this.')),
+      result);
+    const reloadIb = () => { for (const sl of slots) if (isIB(sl.symbol) && sl.status !== 'live') sl.load(sl.symbol, sl.tf); };
+    const saveIb = async () => {
+      const cfg = { enabled: on.checked, host: host.value.trim() || '127.0.0.1', port: Math.round(+port.value) || 4001, clientId: Math.max(0, Math.round(+cid.value) || 0) };
+      const st = await MD.ibkr.configure(cfg);
+      showStatus(st);
+      return st;
+    };
+    footer.push(
+      h('button', { class: 'btn', onclick: async () => {
+        result.className = 'td-result muted'; result.textContent = 'Connecting…';
+        try {
+          await saveIb();
+          // wait up to 8 s for IB Gateway to answer
+          let st = ibk;
+          for (let i = 0; i < 16 && on.checked && !st.connected && st.status !== 'error'; i++) { await new Promise((r) => setTimeout(r, 500)); st = await MD.ibkr.status(); showStatus(st); }
+          result.className = 'td-result ' + (st.connected ? 'ok' : 'bad');
+          result.textContent = !on.checked ? 'Interactive Brokers is off.' : st.connected ? '✓ Connected to IB Gateway.' : '✗ ' + (st.message || 'No answer from IB Gateway.');
+          if (st.connected) reloadIb();
+        } catch (e) { result.className = 'td-result bad'; result.textContent = '✗ ' + e.message; }
+      } }, 'Save & test'),
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Close'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        try {
+          const st = await saveIb();
+          m.close();
+          toast(st.enabled ? 'Interactive Brokers turned on' : 'Interactive Brokers turned off', 'info', 2500);
+          setTimeout(reloadIb, 1500);
+          if (after && st.enabled) after();
+        } catch (e) { result.className = 'td-result bad'; result.textContent = '✗ ' + e.message; }
+      } }, 'Save'));
+    m = openModal('Interactive Brokers', body, { footer, onClose: () => clearInterval(poll) });
+    const close0 = m.close;
+    m.close = () => { clearInterval(poll); close0(); };
+    MD.ibkr.status().then((st) => {
+      on.checked = st.enabled; host.value = st.host; port.value = st.port; cid.value = st.clientId;
+      showStatus(st);
+      poll = setInterval(() => { if (!statusLine.isConnected) { clearInterval(poll); return; } MD.ibkr.status().then(showStatus, () => {}); }, 3000);
+    }, (e) => {
+      statusLine.className = 'ib-status bad';
+      statusLine.textContent = e.status === 401 ? 'Candela’s server needs its access token first (Alert server button).' : 'Could not ask Candela’s server: ' + e.message;
+    });
   }
 
   // ---- stock & forex data settings (Twelve Data key, plan limits, usage)
@@ -2933,8 +3060,8 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
     for (const sym of shown) {
       const q = quotes[sym];
       const row = h('div', { class: 'wl-row' + (active && sym === active.symbol ? ' active' : ''), 'data-sym': sym, onclick: () => openSymbol(sym) },
-        h('span', { class: 'wl-sym', title: isStock(sym) ? `${bare(sym)} (${MD.isForex(sym) ? 'forex' : 'stock'}, Twelve Data)` : MD.isBStock(sym) ? `${bare(sym)}: Binance bStock tracking ${MD.bStockTicker(sym)}` : exOf(sym) ? `${bare(sym)} on ${exOf(sym).name}` : `${sym} on Binance` },
-          bare(sym), exOf(sym) ? h('i', { class: 'ex-tag' }, exOf(sym).tag) : null),
+        h('span', { class: 'wl-sym', title: isIB(sym) ? `${bare(sym)} on Interactive Brokers` : isStock(sym) ? `${bare(sym)} (${MD.isForex(sym) ? 'forex' : 'stock'}, Twelve Data)` : MD.isBStock(sym) ? `${bare(sym)}: Binance bStock tracking ${MD.bStockTicker(sym)}` : exOf(sym) ? `${bare(sym)} on ${exOf(sym).name}` : `${sym} on Binance` },
+          bare(sym), exOf(sym) ? h('i', { class: 'ex-tag' + (isIB(sym) ? ' ib' : '') }, exOf(sym).tag) : null),
         h('span', { class: 'wl-last' }, q ? q.c.toFixed(decimalsFor(q.c)) : '—'),
         h('span', { class: 'wl-chg' }, q ? fmtChg(q) : ''),
         h('span', { class: 'wl-vol' }, q && q.vq > 0 ? fmtVol(q.vq) : ''),
@@ -5046,6 +5173,7 @@ mark cross(dir, 0) and dir < 0 "Short" above color red
         section('Discord', 'In a Discord channel: Edit channel → Integrations → Webhooks → New webhook → Copy webhook URL.', dcRow),
         section('Slack', 'Create a Slack app with an incoming webhook for a channel (api.slack.com/messaging/webhooks) and paste its URL.', slRow),
         section('Other webhook', 'Any URL that accepts a JSON POST ({ title, message, source, time }). Discord and Slack URLs work here too.', whRow),
+        section('Interactive Brokers', 'Charts and alerts with data from your IBKR account, through IB Gateway on this computer.', h('button', { class: 'btn small-btn', onclick: () => { m.close(); openIbkrSettings(); } }, 'Interactive Brokers settings…')),
         resultBox,
         h('div', { class: 'menu-label' }, 'Recently fired'), evBox);
       const renderEvents = () => {

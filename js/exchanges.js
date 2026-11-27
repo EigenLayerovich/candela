@@ -1052,6 +1052,7 @@
     return out.sort((a, b) => order.indexOf(a.ex) - order.indexOf(b.ex));
   }
   function ticker(sym) {
+    if (/^IB:/.test(sym || '') && MD.ibQuote) return MD.ibQuote(sym);
     const s = parse(sym);
     return s ? s.ex.ticker(s.b, s.q) : binanceTicker(sym);
   }
@@ -1072,10 +1073,22 @@
       return METALS[b] ? 'metal' : COMMODITIES[b] ? 'commodity' : 'forex';
     }
     if (MD.isBStock && MD.isBStock(sym)) return 'stock';
+    const ib = /^IB:([A-Z]+):([A-Z0-9.]+):\d+$/.exec(sym || '');
+    if (ib) return ibClass(ib[1], ib[2]);
     const bq = splitBinance(sym || '');
     return bq ? classify(bq.base, null) || 'crypto' : 'crypto';
   }
   const loadedPairs = () => loaded;
+  // Interactive Brokers: by security type, and for futures and commodities by the underlying (ESZ6 -> ES)
+  const FUT_METAL = /^(GC|MGC|SI|SIL|HG|MHG|PL|PA|QO|QI)$/, FUT_STOCK = /^(ES|MES|NQ|MNQ|YM|MYM|RTY|M2K|NKD|FDAX|FESX|VX|EMD)$/, FUT_FX = /^(6[ABCEJMNS]|M6[ABE]|E7|J7|DX)$/;
+  function ibClass(sec, label) {
+    if (sec === 'STK' || sec === 'IND') return 'stock';
+    if (sec === 'CASH') return 'forex';
+    if (sec === 'CRYPTO') return 'crypto';
+    const root = sec === 'FUT' ? label.replace(/[FGHJKMNQUVXZ]\d{1,2}$/, '') : label;
+    if (sec === 'CMDTY') return /^(XAU|XAG|XPT|XPD)/.test(root) ? 'metal' : 'commodity';
+    return FUT_METAL.test(root) ? 'metal' : FUT_STOCK.test(root) ? 'stock' : FUT_FX.test(root) ? 'forex' : 'commodity';
+  }
   const exchangeOf = (sym) => { const s = parse(sym); return s ? s.ex : null; };
   // "BTC/USD"; perpetual futures: "BTC/USDT PERP"
   const exDisplay = (sym) => { const s = parse(sym); return s ? `${s.b}/${s.q}${s.ex.futures ? ' PERP' : ''}` : null; };

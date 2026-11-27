@@ -45,11 +45,15 @@ const events = new EventEmitter(); // 'fired' (event) — the desktop app shows 
 globalThis.window = globalThis;
 for (const f of ['indicators.js', 'script.js', 'alerts-core.js', 'data.js', 'exchanges.js']) require(path.join(ROOT, 'js', f));
 const IND = globalThis.Indicators, CS = globalThis.CandelaScript, AL = globalThis.CandelaAlerts, MD = globalThis.MarketData;
+// Interactive Brokers through IB Gateway on this computer (off until turned on in the app)
+const IBK = require(path.join(ROOT, 'ibkr.js'));
+MD.registerSource(IBK.isIB, { tfs: () => IBK.TFS, history: (sym, tf, opts) => IBK.history(sym, tf, opts), stream: (sym, tf, onBar, onStatus) => IBK.stream(sym, tf, onBar, onStatus) });
+MD.ibQuote = (sym) => IBK.quote(sym);
 
 const log = (...a) => console.log(new Date().toISOString().replace('T', ' ').slice(0, 19), ...a);
 
 // ---------------------------------------------------------------------- storage
-const DEFAULT_SETTINGS = { ntfy: { server: 'https://ntfy.sh', topic: '' }, telegram: { token: '', chatId: '' }, webhook: { url: '' }, discord: { url: '' }, slack: { url: '' }, twelveData: { key: '', perMin: 8, perDay: 800 } };
+const DEFAULT_SETTINGS = { ntfy: { server: 'https://ntfy.sh', topic: '' }, telegram: { token: '', chatId: '' }, webhook: { url: '' }, discord: { url: '' }, slack: { url: '' }, twelveData: { key: '', perMin: 8, perDay: 800 }, ibkr: { enabled: false, host: '127.0.0.1', port: 4001, clientId: 77 } };
 const CHANNELS = ['ntfy', 'telegram', 'discord', 'slack', 'webhook'];
 let db = { version: VERSION, alerts: [], scripts: [], settings: clone(DEFAULT_SETTINGS), events: [] };
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -286,7 +290,7 @@ async function knownSymbols() {
   return symbolSet;
 }
 async function pollPrices() {
-  const list = db.alerts.filter((a) => AL.isTick(a) && a.active && AL.serverEligible(a) && !MD.isStock(a.symbol) && !MD.exchangeOf(a.symbol));
+  const list = db.alerts.filter((a) => AL.isTick(a) && a.active && AL.serverEligible(a) && !MD.isStock(a.symbol) && !MD.exchangeOf(a.symbol) && !IBK.isIB(a.symbol));
   const syms = [...new Set(list.map((a) => a.symbol))];
   if (!syms.length) return;
   let rows;
@@ -311,7 +315,7 @@ async function pollExchangePrices() {
   if (exPolling) return;
   exPolling = true;
   try {
-    const list = db.alerts.filter((a) => AL.isTick(a) && a.active && MD.exchangeOf(a.symbol));
+    const list = db.alerts.filter((a) => AL.isTick(a) && a.active && (MD.exchangeOf(a.symbol) || (IBK.isIB(a.symbol) && IBK.enabled())));
     await Promise.all([...new Set(list.map((a) => a.symbol))].map(async (sym) => {
       let cur;
       try { cur = (await MD.ticker(sym)).c; } catch (e) { return; }
@@ -392,6 +396,9 @@ async function makeAlert(b) {
     if (!STOCK_RE.test(b.symbol)) throw new BadRequest('Unknown symbol');
     if (!db.settings.twelveData.key) throw new BadRequest('The server has no Twelve Data key for stocks yet (open the app from the server to share it)');
     if (b.kind === 'marker' && !MD.supportsTf(b.symbol, b.tf)) throw new BadRequest('That timeframe is not available for stocks');
+  } else if (IBK.isIB(b.symbol || '')) {
+    if (!IBK.status().enabled) throw new BadRequest('Interactive Brokers is not turned on in the alert server');
+    if (b.kind === 'marker' || b.kind === 'cond') { if (!IBK.TFS.includes(b.tf) && !MD.supportsTf(b.symbol, b.tf)) throw new BadRequest('That timeframe is not available from IBKR'); }
   } else if (MD.exchangeOf(b.symbol || '')) {
     if ((b.symbol || '').length > 40) throw new BadRequest('Unknown symbol');
   } else {
@@ -626,6 +633,41 @@ async function handleApi(req, res, url) {
     }
   }
   if (p === '/api/settings' && m === 'GET') return send(res, 200, publicSettings());
+  // ---- Interactive Brokers (IB Gateway on this computer)
+  if (p === '/api/ibkr/status' && m === 'GET') return send(res, 200, IBK.status());
+  if (p === '/api/ibkr' && m === 'PUT') {
+    const b = await readJson(req), c = db.settings.ibkr;
+    if (typeof b.enabled === 'boolean') c.enabled = b.enabled;
+    if (b.host !== undefined) { if (!str(b.host, 100) || !/^[A-Za-z0-9.:-]+$/.test(b.host)) throw new BadRequest('Enter the host name or IP of IB Gateway (127.0.0.1 if it runs on this computer)'); c.host = b.host; }
+    if (b.port !== undefined) { if (!(Number.isInteger(b.port) && b.port > 0 && b.port < 65536)) throw new BadRequest('Enter the API port of IB Gateway (live 4001, paper 4002)'); c.port = b.port; }
+    if (b.clientId !== undefined) { if (!(Number.isInteger(b.clientId) && b.clientId >= 0 && b.clientId < 1e9)) throw new BadRequest('The client ID is a whole number'); c.clientId = b.clientId; }
+    saveNow();
+    IBK.configure(c, log);
+    return send(res, 200, IBK.status());
+  }
+  if (p === '/api/ibkr/search' && m === 'GET') {
+    try { return send(res, 200, { results: await IBK.search(String(url.searchParams.get('q') || '').slice(0, 40)) }); } catch (e) { return send(res, e.needsSetup ? 409 : 502, { error: e.message }); }
+  }
+  if (p === '/api/ibkr/history' && m === 'GET') {
+    const sym = url.searchParams.get('sym') || '', tf = url.searchParams.get('tf') || '', end = +url.searchParams.get('end') || undefined;
+    if (!IBK.isIB(sym)) throw new BadRequest('Not an IBKR symbol');
+    try { return send(res, 200, { bars: await IBK.history(sym, tf, { endTime: end }) }); } catch (e) { return send(res, e.fatal ? 404 : 502, { error: e.message, fatal: !!e.fatal }); }
+  }
+  if (p === '/api/ibkr/quote' && m === 'GET') {
+    const sym = url.searchParams.get('sym') || '';
+    if (!IBK.isIB(sym)) throw new BadRequest('Not an IBKR symbol');
+    try { return send(res, 200, await IBK.quote(sym)); } catch (e) { return send(res, 502, { error: e.message }); }
+  }
+  if (p === '/api/ibkr/stream' && m === 'GET') {
+    const sym = url.searchParams.get('sym') || '', tf = url.searchParams.get('tf') || '';
+    if (!IBK.isIB(sym) || !IBK.TFS.includes(tf)) throw new BadRequest('Bad symbol or timeframe');
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+    res.write('retry: 5000\n\n');
+    const stop = IBK.stream(sym, tf, (bar) => res.write(`data: ${JSON.stringify(bar)}\n\n`), (st, msg) => res.write(`event: status\ndata: ${JSON.stringify({ st, msg: msg || '' })}\n\n`));
+    const ka = setInterval(() => res.write(': keep-alive\n\n'), 25000);
+    req.on('close', () => { clearInterval(ka); stop(); });
+    return;
+  }
   if (p === '/api/settings' && m === 'PUT') {
     const b = await readJson(req), s = db.settings;
     // masked values (••••) mean "keep what is stored"
@@ -710,6 +752,7 @@ function start(opts = {}) {
       server.off('error', onError);
       loadDb();
       MD.stockConfig(db.settings.twelveData);
+      IBK.configure(db.settings.ibkr, log);
       MD.loadBStocks().catch(() => {}); // only for nicer names in notifications (NVDAB instead of NVDABUSDT)
       db.scripts.forEach(compileScript);
       syncFeeds();
